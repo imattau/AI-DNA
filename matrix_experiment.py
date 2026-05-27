@@ -4,8 +4,15 @@ from dataclasses import dataclass, replace
 from random import Random
 from typing import Callable, Sequence
 
-from codons import build_codon_table, crossover_codons, insert_delete_codons, mutate_codons, random_codons, unique_ordered
-from genome import Motif
+from codons import (
+    build_codon_table,
+    crossover_codons,
+    insert_delete_codons,
+    mutate_codons_with_table,
+    random_codons,
+    unique_ordered,
+)
+from genome import Motif, format_motif, motif_statistics
 from tracing import ExperimentReport, lineage_tree_text
 
 
@@ -346,11 +353,18 @@ class MatrixGenome:
         rng: Random,
         *,
         mutation_rate: float = 0.08,
+        synonym_rate: float = 0.65,
         insertion_rate: float = 0.05,
         deletion_rate: float = 0.03,
         motif_mutation_rate: float = 0.2,
     ) -> "MatrixGenome":
-        codons = mutate_codons(self.codons, rng, mutation_rate=mutation_rate)
+        codons = mutate_codons_with_table(
+            self.codons,
+            rng,
+            MATRIX_CODON_TABLE,
+            mutation_rate=mutation_rate,
+            synonym_rate=synonym_rate,
+        )
         codons = insert_delete_codons(
             codons,
             rng,
@@ -377,6 +391,7 @@ class MatrixEvaluation:
     mul_count: int
     case_errors: tuple[float, ...]
     trace_examples: tuple[str, ...]
+    neutrality_estimate: float = 0.0
 
     @property
     def score(self) -> float:
@@ -675,11 +690,56 @@ def _exact_output_positions(predictions: Sequence[Sequence[float]], cases: Seque
     return exact
 
 
+def _estimate_matrix_neutrality(
+    genome: MatrixGenome,
+    bundle: MatrixBundle,
+    *,
+    trials: int = 6,
+    mutation_rate: float = 0.08,
+    synonym_rate: float = 0.65,
+) -> float:
+    if trials <= 0:
+        return 0.0
+    baseline = evaluate_genome(genome, bundle, include_neutrality=False)
+    baseline_signature = (
+        baseline.train_error,
+        baseline.validation_error,
+        baseline.exact_output_positions,
+        baseline.symbolic_verified,
+        baseline.shortcut_hits,
+        baseline.mul_count,
+    )
+    rng = Random(sum(genome.codons) + len(genome.codons))
+    neutral = 0
+    for trial in range(trials):
+        candidate = genome.mutate(
+            rng,
+            mutation_rate=mutation_rate,
+            synonym_rate=synonym_rate,
+            insertion_rate=0.0,
+            deletion_rate=0.0,
+            motif_mutation_rate=0.0,
+        ).with_lineage(f"{genome.lineage_id}.n{trial + 1}")
+        candidate_eval = evaluate_genome(candidate, bundle, include_neutrality=False)
+        candidate_signature = (
+            candidate_eval.train_error,
+            candidate_eval.validation_error,
+            candidate_eval.exact_output_positions,
+            candidate_eval.symbolic_verified,
+            candidate_eval.shortcut_hits,
+            candidate_eval.mul_count,
+        )
+        if candidate_signature == baseline_signature:
+            neutral += 1
+    return neutral / trials
+
+
 def evaluate_genome(
     genome: MatrixGenome,
     bundle: MatrixBundle,
     *,
     max_steps: int = 256,
+    include_neutrality: bool = True,
 ) -> MatrixEvaluation:
     train_error = 0.0
     validation_error = 0.0
@@ -723,6 +783,9 @@ def evaluate_genome(
     symbolic_verified = False
     if train_error == 0.0 and validation_error == 0.0:
         symbolic_verified, _symbolic_outputs = symbolic_verify_matrix_program(genome)
+    neutrality_estimate = 0.0
+    if include_neutrality:
+        neutrality_estimate = _estimate_matrix_neutrality(genome, bundle)
 
     return MatrixEvaluation(
         genome=genome,
@@ -734,6 +797,7 @@ def evaluate_genome(
         mul_count=mul_count,
         case_errors=tuple(train_case_errors),
         trace_examples=tuple(traces[:8]),
+        neutrality_estimate=neutrality_estimate,
     )
 
 
@@ -749,6 +813,7 @@ def clone_population(genomes: Sequence[MatrixGenome]) -> list[MatrixGenome]:
 @dataclass(frozen=True, slots=True)
 class MatrixSearchConfig:
     mutation_rate: float = 0.08
+    synonym_rate: float = 0.65
     insertion_rate: float = 0.05
     deletion_rate: float = 0.03
     motif_mutation_rate: float = 0.2
@@ -860,6 +925,7 @@ def run_matrix_experiment(
                                 child = parent_a.mutate(
                                     rng,
                                     mutation_rate=config.mutation_rate,
+                                    synonym_rate=config.synonym_rate,
                                     insertion_rate=config.insertion_rate,
                                     deletion_rate=config.deletion_rate,
                                     motif_mutation_rate=config.motif_mutation_rate,
@@ -891,14 +957,14 @@ def run_matrix_experiment(
     assert best_genome is not None
 
     solved = best_evaluation.validation_error == 0.0 and best_evaluation.train_error == 0.0 and best_evaluation.symbolic_verified
-    motif_summary: tuple[str, ...] = ()
-    if solved:
+    motif_summary: tuple[str, ...] = tuple(format_motif(motif) for motif in best_genome.local_motifs)
+    if solved and not motif_summary:
         motif = extract_motif_from_ops(
             best_genome.declare_ops()[:12],
             origin_lineage=best_genome.lineage_id,
             origin_task=bundle.name,
         )
-        motif_summary = (f"{motif.origin_lineage}:{'|'.join(motif.pattern)}#reuse={motif.reuse_count}",)
+        motif_summary = (format_motif(motif),)
 
     report = ExperimentReport(
         experiment=experiment_name,
@@ -913,9 +979,11 @@ def run_matrix_experiment(
         extra={
             "genome_codons": best_genome.signature(),
             "mul_count": best_evaluation.mul_count,
+            "neutrality_estimate": best_evaluation.neutrality_estimate,
             "solved": solved,
             "symbolic_verified": best_evaluation.symbolic_verified,
             "exact_output_positions": best_evaluation.exact_output_positions,
+            **motif_statistics(best_genome.local_motifs if best_genome.local_motifs else tuple()),
             "island_count": config.island_count,
             "migration_interval": config.migration_interval,
             "migration_size": config.migration_size,

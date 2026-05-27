@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from random import Random
-from typing import Iterable, Sequence
+from typing import Callable, Iterable, Sequence
 
-from codons import crossover_codons, random_codons
+from codons import crossover_codons, mutate_codons_neutral, random_codons
 from genome import CellGenome, Motif, extract_motif_from_rules, unique_genomes_by_signature
 
 
@@ -25,6 +25,7 @@ class Evaluation:
     validation_error: float
     shortcut_hits: int
     trace_examples: tuple[str, ...]
+    neutrality_estimate: float = 0.0
 
     @property
     def score(self) -> float:
@@ -34,6 +35,7 @@ class Evaluation:
 @dataclass(frozen=True, slots=True)
 class EvolutionConfig:
     mutation_rate: float = 0.08
+    synonym_rate: float = 0.65
     insertion_rate: float = 0.05
     deletion_rate: float = 0.03
     motif_mutation_rate: float = 0.2
@@ -96,13 +98,24 @@ def mutate_genome(
     *,
     lineage_id: str,
     mutation_rate: float = 0.08,
+    synonym_rate: float = 0.65,
     insertion_rate: float = 0.05,
     deletion_rate: float = 0.03,
     motif_mutation_rate: float = 0.2,
 ) -> CellGenome:
-    mutated = genome.mutate(
+    mutated_codons = mutate_codons_neutral(
+        genome.codons,
         rng,
         mutation_rate=mutation_rate,
+        synonym_rate=synonym_rate,
+    )
+    mutated = CellGenome(
+        codons=mutated_codons,
+        local_motifs=genome.local_motifs,
+        lineage_id=genome.lineage_id,
+    ).mutate(
+        rng,
+        mutation_rate=0.0,
         insertion_rate=insertion_rate,
         deletion_rate=deletion_rate,
         motif_mutation_rate=motif_mutation_rate,
@@ -127,6 +140,7 @@ def spawn_sibling_variants(
                 rng,
                 lineage_id=f"{lineage_prefix}.{index + 1}",
                 mutation_rate=config.mutation_rate,
+                synonym_rate=config.synonym_rate,
                 insertion_rate=config.insertion_rate,
                 deletion_rate=config.deletion_rate,
                 motif_mutation_rate=config.motif_mutation_rate,
@@ -172,3 +186,29 @@ def lineage_edges(genomes: Iterable[CellGenome]) -> tuple[tuple[str, tuple[str, 
 
 def diversify_genomes(genomes: Sequence[CellGenome]) -> tuple[CellGenome, ...]:
     return unique_genomes_by_signature(genomes)
+
+
+def estimate_neutrality(
+    genome: CellGenome,
+    evaluator: Callable[[CellGenome], Evaluation],
+    rng: Random,
+    *,
+    trials: int = 8,
+    mutation_rate: float = 0.08,
+    synonym_rate: float = 0.65,
+) -> float:
+    if trials <= 0:
+        return 0.0
+    baseline = evaluator(genome).score
+    neutral = 0
+    for trial in range(trials):
+        candidate = mutate_genome(
+            genome,
+            rng,
+            lineage_id=f"{genome.lineage_id}.n{trial + 1}",
+            mutation_rate=mutation_rate,
+            synonym_rate=synonym_rate,
+        )
+        if abs(evaluator(candidate).score - baseline) < 1e-9:
+            neutral += 1
+    return neutral / trials

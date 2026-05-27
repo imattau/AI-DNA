@@ -305,6 +305,72 @@ def build_linear_solve_bundle(
     )
 
 
+def build_matrix2_det_bundle(
+    *,
+    train_values: range = range(-2, 5),
+    validation_values: range = range(-3, 6),
+) -> TaskBundle:
+    def target_fn(x: float, y: float) -> float:
+        return x * x - y * y
+
+    return _bundle(
+        name="matrix2_det",
+        train_values=train_values,
+        validation_values=validation_values,
+        target_fn=target_fn,
+        shortcut_checks=(
+            lambda case: case.x + case.y,
+            lambda case: case.x - case.y,
+            lambda case: case.x * case.y,
+            lambda case: 2 * case.x,
+            lambda case: 2 * case.y,
+        ),
+        anti_shortcut_points=(
+            (-2, 1),
+            (-1, 3),
+            (0, 4),
+            (1, -3),
+            (2, -1),
+            (3, 2),
+            (4, -2),
+            (5, 1),
+        ),
+    )
+
+
+def build_symbolic_equation_bundle(
+    *,
+    train_values: range = range(1, 6),
+    validation_values: range = range(1, 8),
+) -> TaskBundle:
+    def target_fn(x: float, y: float) -> float:
+        return (x * x + y * y - y) / x
+
+    return _bundle(
+        name="symbolic_equation",
+        train_values=train_values,
+        validation_values=validation_values,
+        target_fn=target_fn,
+        shortcut_checks=(
+            lambda case: case.y / case.x,
+            lambda case: case.x + case.y,
+            lambda case: case.x * case.x,
+            lambda case: case.y * case.y,
+            lambda case: 2 * case.y - case.x,
+        ),
+        anti_shortcut_points=(
+            (1, 2),
+            (2, 3),
+            (3, 1),
+            (4, 5),
+            (5, 2),
+            (6, 4),
+            (7, 3),
+            (8, 6),
+        ),
+    )
+
+
 def build_task_suite() -> tuple[TaskBundle, ...]:
     return (
         build_multiply_bundle(),

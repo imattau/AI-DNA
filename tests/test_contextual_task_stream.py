@@ -41,6 +41,12 @@ def test_contextual_task_stream_runs_with_varying_contexts() -> None:
     assert report.results[0].context_label == "baseline"
     assert report.results[1].context_label == "noisy"
     assert report.results[2].context_label == "scaled"
+    assert any(result.motif_count > 0 for result in report.results)
+    assert all(result.lineage_efficiency >= 0.0 for result in report.results)
+    assert any(result.lineage_transfer_scores for result in report.results)
     assert report.archive_snapshots
     assert any(snapshot.current_task.endswith("[noisy]") for snapshot in report.archive_snapshots)
+    assert any(snapshot.motif_transfer_count >= 0 for snapshot in report.archive_snapshots)
+    assert any(snapshot.lineage_efficiency >= 0.0 for snapshot in report.archive_snapshots)
+    assert any(snapshot.lineage_transfer_scores for snapshot in report.archive_snapshots)
     assert report.final_population

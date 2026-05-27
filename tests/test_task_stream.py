@@ -28,5 +28,14 @@ def test_task_stream_runs_multiple_tasks_and_grows() -> None:
     assert max(result.max_cells for result in report.results) >= 6
     assert report.final_population
     assert any(result.births > 0 for result in report.results)
+    assert any(result.motif_count > 0 for result in report.results)
+    assert all(result.resource_regen >= 0.5 for result in report.results)
+    assert all(result.energy_efficiency >= 0.0 for result in report.results)
+    assert all(result.lineage_efficiency >= 0.0 for result in report.results)
+    assert all(result.forgetting_delta >= -1e9 for result in report.results)
+    assert any(result.lineage_transfer_scores for result in report.results)
     assert report.archive_snapshots
     assert report.archive_snapshots[0].mean_archive_error >= 0.0
+    assert any(snapshot.motif_transfer_count >= 0 for snapshot in report.archive_snapshots)
+    assert any(snapshot.lineage_efficiency >= 0.0 for snapshot in report.archive_snapshots)
+    assert any(snapshot.lineage_transfer_scores for snapshot in report.archive_snapshots)

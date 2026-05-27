@@ -4,7 +4,13 @@ from dataclasses import dataclass, field
 from random import Random
 from typing import Sequence
 
-from codons import build_codon_table, crossover_codons, insert_delete_codons, mutate_codons, random_codons
+from codons import (
+    build_codon_table,
+    crossover_codons,
+    insert_delete_codons,
+    mutate_codons_with_table,
+    random_codons,
+)
 from tracing import ExperimentReport, lineage_tree_text
 
 
@@ -88,11 +94,18 @@ class ReplicationGenome:
         rng: Random,
         *,
         mutation_rate: float = 0.08,
+        synonym_rate: float = 0.65,
         insertion_rate: float = 0.05,
         deletion_rate: float = 0.03,
         max_length: int = 32,
     ) -> "ReplicationGenome":
-        codons = mutate_codons(self.codons, rng, mutation_rate=mutation_rate)
+        codons = mutate_codons_with_table(
+            self.codons,
+            rng,
+            REPLICATION_CODON_TABLE,
+            mutation_rate=mutation_rate,
+            synonym_rate=synonym_rate,
+        )
         codons = insert_delete_codons(
             codons,
             rng,
@@ -137,6 +150,7 @@ class ReplicationEvaluation:
     mismatch_count: int
     prefix_match: int
     trace_examples: tuple[str, ...]
+    neutrality_estimate: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +160,7 @@ class ReplicationSearchConfig:
     generations: int = 40
     survivor_count: int = 6
     mutation_rate: float = 0.08
+    synonym_rate: float = 0.65
     insertion_rate: float = 0.05
     deletion_rate: float = 0.03
     crossover_rate: float = 0.35
@@ -267,6 +282,22 @@ def evaluate_replication_genome(genome: ReplicationGenome) -> ReplicationEvaluat
         f"s{event['step']}:{event['op']} {event['note']}"
         for event in state.trace[:8]
     )
+    neutrality_rng = Random(sum(genome.codons) + len(genome.codons))
+    neutrality_trials = 6
+    neutral = 0
+    for trial in range(neutrality_trials):
+        candidate = genome.mutate(
+            neutrality_rng,
+            mutation_rate=0.08,
+            synonym_rate=0.65,
+            insertion_rate=0.0,
+            deletion_rate=0.0,
+            max_length=max(32, len(genome.codons)),
+        )
+        candidate_eval = run_replication_program(candidate)
+        candidate_offspring = candidate_eval.offspring or ()
+        if candidate_offspring == offspring:
+            neutral += 1
     return ReplicationEvaluation(
         genome=genome,
         score=score,
@@ -275,6 +306,7 @@ def evaluate_replication_genome(genome: ReplicationGenome) -> ReplicationEvaluat
         mismatch_count=mismatch_count + length_diff,
         prefix_match=prefix_match,
         trace_examples=trace_examples,
+        neutrality_estimate=neutral / neutrality_trials,
     )
 
 
@@ -337,6 +369,7 @@ def run_replication_experiment(
                     child = parent.mutate(
                         rng,
                         mutation_rate=config.mutation_rate,
+                        synonym_rate=config.synonym_rate,
                         insertion_rate=config.insertion_rate,
                         deletion_rate=config.deletion_rate,
                         max_length=config.max_length,
@@ -372,6 +405,7 @@ def run_replication_experiment(
             "exact_replication": best_eval.exact_replication,
             "score": best_eval.score,
             "prefix_match": best_eval.prefix_match,
+            "neutrality_estimate": best_eval.neutrality_estimate,
             "restarts": config.restarts,
             "generations": config.generations,
             "population_size": config.population_size,

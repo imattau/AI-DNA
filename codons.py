@@ -57,6 +57,11 @@ class CodonTable:
 
         return choice(self.op_to_codons[op])
 
+    def synonymous_codons(self, codon: int, *, modulus: int = 256) -> tuple[int, ...]:
+        table_size = len(self.codon_to_op)
+        op = self.op(codon % table_size)
+        return tuple(candidate for candidate in self.op_to_codons[op] if candidate % modulus == candidate)
+
     def encode_ops(self, ops: list[str]) -> list[int]:
         return [self.random_codon(op) for op in ops]
 
@@ -150,6 +155,61 @@ def mutate_codons(
     for index, value in enumerate(mutated):
         if rng.random() < mutation_rate:
             mutated[index] = (value + rng.choice((-7, -3, -1, 1, 3, 7))) % modulus
+    return tuple(mutated)
+
+
+def synonymous_codons(
+    codon: int,
+    *,
+    modulus: int = 256,
+    synonym_modulus: int = len(RULE_NAMES),
+) -> tuple[int, ...]:
+    rule_index = codon % synonym_modulus
+    synonyms = tuple(candidate for candidate in range(modulus) if candidate % synonym_modulus == rule_index)
+    return synonyms
+
+
+def mutate_codons_neutral(
+    codons: Sequence[int],
+    rng: Random,
+    *,
+    mutation_rate: float = 0.08,
+    synonym_rate: float = 0.65,
+    modulus: int = 256,
+) -> tuple[int, ...]:
+    mutated = [codon % modulus for codon in codons]
+    for index, value in enumerate(mutated):
+        if rng.random() >= mutation_rate:
+            continue
+        if rng.random() < synonym_rate:
+            synonyms = tuple(candidate for candidate in synonymous_codons(value, modulus=modulus) if candidate != value)
+            if synonyms:
+                mutated[index] = rng.choice(synonyms)
+                continue
+        mutated[index] = (value + rng.choice((-7, -3, -1, 1, 3, 7))) % modulus
+    return tuple(mutated)
+
+
+def mutate_codons_with_table(
+    codons: Sequence[int],
+    rng: Random,
+    table: CodonTable,
+    *,
+    mutation_rate: float = 0.08,
+    synonym_rate: float = 0.65,
+    modulus: int = 256,
+) -> tuple[int, ...]:
+    mutated = [codon % modulus for codon in codons]
+    table_size = len(table.codon_to_op)
+    for index, value in enumerate(mutated):
+        if rng.random() >= mutation_rate:
+            continue
+        if rng.random() < synonym_rate:
+            synonyms = [candidate for candidate in table.synonymous_codons(value, modulus=table_size) if candidate != value]
+            if synonyms:
+                mutated[index] = rng.choice(synonyms)
+                continue
+        mutated[index] = (value + rng.choice((-7, -3, -1, 1, 3, 7))) % modulus
     return tuple(mutated)
 
 

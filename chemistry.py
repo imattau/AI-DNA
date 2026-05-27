@@ -177,21 +177,33 @@ class ChemistrySystem:
     dt: float = 1.0
     quiescence_steps: int = 2
 
+    def step(
+        self,
+        cell: CellState,
+        task: TaskCase,
+        context: ChemistryContext,
+        *,
+        event_index_start: int = 0,
+    ) -> tuple[bool, int]:
+        changed = False
+        event_index = event_index_start
+        for rule_name in cell.active_rules:
+            rule = self.rulebook[rule_name]
+            before = tuple(cell.signals)
+            note = rule.apply(cell, task, context)
+            after = tuple(cell.signals)
+            if after != before or note:
+                changed = True
+                _record(cell, event_index, rule_name, before, note or "")
+                event_index += 1
+        return changed, event_index
+
     def run(self, cell: CellState, task: TaskCase, *, context: ChemistryContext | None = None) -> CellState:
         context = context or ChemistryContext()
         quiet_ticks = 0
         event_index = 0
         while context.time <= self.max_time:
-            changed = False
-            for rule_name in cell.active_rules:
-                rule = self.rulebook[rule_name]
-                before = tuple(cell.signals)
-                note = rule.apply(cell, task, context)
-                after = tuple(cell.signals)
-                if after != before or note:
-                    changed = True
-                    _record(cell, event_index, rule_name, before, note or "")
-                    event_index += 1
+            changed, event_index = self.step(cell, task, context, event_index_start=event_index)
             if cell.output is not None and not changed:
                 quiet_ticks += 1
             else:

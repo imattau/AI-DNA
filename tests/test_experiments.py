@@ -19,6 +19,8 @@ def test_remaining_experiments_run() -> None:
         "10_evolve_self_replication.py",
         "11_contextual_task_stream.py",
         "12_math_task_ecology.py",
+        "13_cooperative_chemistry.py",
+        "14_adaptive_math_ecology.py",
     ]
     for script_name in scripts:
         completed = subprocess.run(

@@ -19,6 +19,7 @@ def test_reference_matrix_program_is_exact() -> None:
     assert evaluation.exact_output_positions == 9
     assert evaluation.symbolic_verified is True
     assert evaluation.shortcut_hits == 0
+    assert 0.0 <= evaluation.neutrality_estimate <= 1.0
     verified, _outputs = symbolic_verify_matrix_program(genome)
     assert verified is True
 

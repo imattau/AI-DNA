@@ -48,3 +48,12 @@ def test_colony_advance_keeps_population_size_constant() -> None:
         config=EvolutionConfig(),
     )
     assert len(colony.members) == 8
+
+
+def test_evaluate_genome_reports_neutrality_estimate() -> None:
+    genome = CellGenome.from_rule_names(
+        ["RULE_EMIT_X", "RULE_COPY0_3", "RULE_ADD0_IF1"],
+        lineage_id="neutrality",
+    )
+    evaluation = evaluate_genome(genome, build_multiply_bundle())
+    assert 0.0 <= evaluation.neutrality_estimate <= 1.0

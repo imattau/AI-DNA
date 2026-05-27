@@ -30,3 +30,4 @@ def test_evolving_replication_experiment_runs() -> None:
     assert report.experiment == "smoke_self_replication"
     assert report.active_rules
     assert "exact_replication" in report.extra
+    assert "neutrality_estimate" in report.extra

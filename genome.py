@@ -4,7 +4,14 @@ from dataclasses import dataclass, replace
 from random import Random
 from typing import Iterable, Sequence
 
-from codons import RULE_NAMES, codons_from_rule_names, decode_rule_name, insert_delete_codons, mutate_codons, unique_ordered
+from codons import (
+    RULE_NAMES,
+    codons_from_rule_names,
+    decode_rule_name,
+    insert_delete_codons,
+    mutate_codons_neutral,
+    unique_ordered,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,11 +59,17 @@ class CellGenome:
         rng: Random,
         *,
         mutation_rate: float = 0.08,
+        synonym_rate: float = 0.65,
         insertion_rate: float = 0.05,
         deletion_rate: float = 0.03,
         motif_mutation_rate: float = 0.2,
     ) -> "CellGenome":
-        codons = mutate_codons(self.codons, rng, mutation_rate=mutation_rate)
+        codons = mutate_codons_neutral(
+            self.codons,
+            rng,
+            mutation_rate=mutation_rate,
+            synonym_rate=synonym_rate,
+        )
         codons = insert_delete_codons(
             codons,
             rng,
@@ -86,6 +99,22 @@ def extract_motif_from_rules(
         origin_lineage=origin_lineage,
         origin_task=origin_task,
     )
+
+
+def format_motif(motif: Motif) -> str:
+    return f"{motif.origin_task}:{motif.origin_lineage}:{'|'.join(motif.pattern)}#reuse={motif.reuse_count}"
+
+
+def motif_statistics(motifs: Sequence[Motif]) -> dict[str, object]:
+    origin_tasks = tuple(sorted({motif.origin_task for motif in motifs}))
+    origin_lineages = tuple(sorted({motif.origin_lineage for motif in motifs}))
+    total_reuse = sum(motif.reuse_count for motif in motifs)
+    return {
+        "motif_count": len(motifs),
+        "motif_reuse_total": total_reuse,
+        "motif_origin_tasks": origin_tasks,
+        "motif_origin_lineages": origin_lineages,
+    }
 
 
 def is_subsequence(candidate: Sequence[str], reference: Sequence[str]) -> bool:

@@ -5,8 +5,8 @@ from random import Random
 from cell import CellState
 from chemistry import ChemistrySystem
 from colony import Colony
-from evolution import Evaluation, EvolutionConfig, mixed_initial_population
-from genome import CellGenome
+from evolution import Evaluation, EvolutionConfig, estimate_neutrality, mixed_initial_population
+from genome import CellGenome, format_motif, motif_statistics
 from tasks import TaskBundle, build_task_sequence, shortcut_hit
 from tracing import ExperimentReport, format_trace, lineage_tree_text
 
@@ -32,6 +32,7 @@ def evaluate_genome(
     *,
     max_time: float = 32.0,
     dt: float = 1.0,
+    include_neutrality: bool = True,
 ) -> Evaluation:
     chemistry = ChemistrySystem(max_time=max_time, dt=dt)
     active_rules = list(genome.declare_rules())
@@ -65,12 +66,23 @@ def evaluate_genome(
         if shortcut_hit(case, prediction, bundle.shortcut_checks):
             shortcut_hits += 1
 
+    neutrality_estimate = 0.0
+    if include_neutrality:
+        neutrality_rng = Random(sum(genome.codons) + len(genome.codons))
+        neutrality_estimate = estimate_neutrality(
+            genome,
+            lambda candidate: evaluate_genome(candidate, bundle, max_time=max_time, dt=dt, include_neutrality=False),
+            neutrality_rng,
+            trials=6,
+        )
+
     return Evaluation(
         genome=genome,
         train_error=train_error / max(1, len(bundle.train)),
         validation_error=validation_error / max(1, len(bundle.validation)),
         shortcut_hits=shortcut_hits,
         trace_examples=tuple(traces[:8]),
+        neutrality_estimate=neutrality_estimate,
     )
 
 
@@ -156,10 +168,7 @@ def run_experiment(
         cell_count=1,
         active_rules=tuple(best_evaluation.genome.declare_rules()),
         lineage_tree=build_lineage_report(best_colony),
-        motifs_per_cell=tuple(
-            f"{motif.origin_lineage}:{'|'.join(motif.pattern)}#reuse={motif.reuse_count}"
-            for motif in best_evaluation.genome.local_motifs
-        ),
+        motifs_per_cell=tuple(format_motif(motif) for motif in best_evaluation.genome.local_motifs),
         shortcut_hits=best_evaluation.shortcut_hits,
         trace_examples=best_evaluation.trace_examples,
         extra={
@@ -169,6 +178,8 @@ def run_experiment(
             "chemistry_max_time": chemistry_max_time,
             "chemistry_dt": chemistry_dt,
             "evolution_config": evolution_config,
+            "neutrality_estimate": best_evaluation.neutrality_estimate,
+            **motif_statistics(best_evaluation.genome.local_motifs),
         },
     )
     if require_perfect and best_evaluation.validation_error != 0.0:
