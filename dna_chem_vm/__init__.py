@@ -5,4 +5,8 @@ from colony import Colony
 from evolution import Evaluation, EvolutionConfig
 from genome import CellGenome, Motif
 from replication import ReplicationGenome, ReplicationState, build_exact_copy_program, build_replication_program, offspring_matches_parent, run_replication_program
+from spatial_body_plan import SpatialBodyPlanEvaluation, SpatialBodyPlanReport, SpatialBodyPlanSearchConfig, SpatialBodyPlanTarget, SpatialTargetCell, build_default_body_plan_target, evaluate_spatial_body_plan, run_spatial_body_plan_search
+from spatial import MorphogenField, SpatialArena, SpatialCell, SpatialDevelopmentReport, build_spatial_demo_genome, build_spatial_repair_demo_genome, run_spatial_development
+from spatial_matrix_fabric import MatrixFabricEvaluation, MatrixFabricReport, MatrixFabricSearchConfig, MatrixFabricStreamConfig, MatrixFabricStreamEpisode, MatrixFabricStreamReport, MatrixFabricStreamTask, MatrixFabricTarget, MatrixCase, evaluate_spatial_matrix_fabric, run_spatial_matrix_fabric_search, run_spatial_matrix_fabric_stream
+from spatial3d import MorphogenField3D, Spatial3DArena, Spatial3DCell, Spatial3DDevelopmentReport, build_spatial3d_demo_genome, run_spatial3d_development
 from tasks import TaskBundle, TaskCase

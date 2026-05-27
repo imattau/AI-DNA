@@ -21,6 +21,12 @@ def test_remaining_experiments_run() -> None:
         "12_math_task_ecology.py",
         "13_cooperative_chemistry.py",
         "14_adaptive_math_ecology.py",
+        "15_spatial_development.py",
+        "16_spatial3d_development.py",
+        "17_spatial_body_plan_search.py",
+        "18_spatial_matrix_fabric.py",
+        "19_spatial_matrix_fabric_stream.py",
+        "20_spatial_self_repair.py",
     ]
     for script_name in scripts:
         completed = subprocess.run(
