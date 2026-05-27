@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from random import Random
 from typing import Sequence
 
@@ -76,6 +76,7 @@ class MatrixFabricEvaluation:
     output_error: float
     role_error: float
     matrix_error: float
+    correct_output_count: int
     missing_cells: int
     extra_cells: int
     dropout_robustness: float
@@ -89,6 +90,7 @@ class MatrixFabricSearchConfig:
     population_size: int = 18
     restarts: int = 5
     generations: int = 16
+    curriculum_generations: int = 6
     survivor_count: int = 5
     siblings_per_survivor: int = 3
     mutation_rate: float = 0.1
@@ -98,6 +100,7 @@ class MatrixFabricSearchConfig:
     crossover_rate: float = 0.35
     founder_fraction: float = 0.5
     founder_bias_fraction: float = 0.6
+    founder_rail_bias_fraction: float = 0.7
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +162,7 @@ class MatrixFabricStreamConfig:
     crossover_rate: float = 0.35
     founder_fraction: float = 0.5
     founder_bias_fraction: float = 0.6
+    founder_rail_bias_fraction: float = 0.7
     motif_transfer_limit: int = 2
 
 
@@ -240,6 +244,19 @@ SAFE_FABRIC_MOTIFS: tuple[tuple[str, ...], ...] = (
     ("GET_X", "GET_Y", "EMIT_0", "HALT"),
 )
 
+FABRIC_RAIL_MOTIFS: tuple[tuple[str, ...], ...] = (
+    ("GET_X", "DIVIDE_EAST", "HALT"),
+    ("GET_Y", "DIVIDE_SOUTH", "HALT"),
+    ("GET_X", "SENSE_0", "HALT"),
+    ("GET_Y", "SENSE_0", "HALT"),
+    ("GET_X", "EMIT_0", "HALT"),
+    ("GET_Y", "EMIT_0", "HALT"),
+    ("SENSE_0", "SET_TYPE_HIGH", "HALT"),
+)
+
+FABRIC_MOTIF_LIMIT = 8
+FABRIC_SHARED_MOTIF_LIMIT = 128
+
 
 def _matrix_multiply(a: Sequence[Sequence[float]], b: Sequence[Sequence[float]]) -> tuple[tuple[float, ...], ...]:
     size = len(a)
@@ -247,6 +264,11 @@ def _matrix_multiply(a: Sequence[Sequence[float]], b: Sequence[Sequence[float]])
         tuple(sum(a[i][k] * b[k][j] for k in range(size)) for j in range(size))
         for i in range(size)
     )
+
+
+def _matrix_columns(matrix: Sequence[Sequence[float]]) -> tuple[tuple[float, ...], ...]:
+    size = len(matrix)
+    return tuple(tuple(matrix[row][col] for row in range(size)) for col in range(size))
 
 
 def _fabric_trace_examples(report) -> tuple[str, ...]:
@@ -258,6 +280,68 @@ def _fabric_trace_examples(report) -> tuple[str, ...]:
                 + (f" ({entry['note']})" if entry.get("note") else "")
             )
     return tuple(examples[:8])
+
+
+def _normalize_motifs(genome: CellGenome, *, limit: int = FABRIC_MOTIF_LIMIT) -> CellGenome:
+    motifs: list[Motif] = []
+    seen: set[tuple[str, ...]] = set()
+    for motif in genome.local_motifs:
+        if motif.pattern in seen:
+            continue
+        seen.add(motif.pattern)
+        motifs.append(motif)
+    if len(motifs) > limit:
+        motifs = motifs[-limit:]
+    return replace(genome, local_motifs=tuple(motifs))
+
+
+def _normalize_motif_pool(motifs: Sequence[Motif], *, limit: int = FABRIC_SHARED_MOTIF_LIMIT) -> list[Motif]:
+    pool: list[Motif] = []
+    seen: set[tuple[str, ...]] = set()
+    for motif in motifs:
+        if motif.pattern in seen:
+            continue
+        seen.add(motif.pattern)
+        pool.append(motif)
+    if len(pool) > limit:
+        pool = pool[-limit:]
+    return pool
+
+
+def _fabric_compute_case(
+    report,
+    target: MatrixFabricTarget,
+    case: MatrixCase,
+) -> tuple[tuple[tuple[float, ...], ...], float, int]:
+    size = len(case.a)
+    occupied_set = set(report.occupied_positions)
+    cell_types = {(cell.x, cell.y): cell.type_id for cell in report.cells}
+    expected = _matrix_multiply(case.a, case.b)
+    columns = _matrix_columns(case.b)
+    computed_rows: list[tuple[float, ...]] = []
+    matrix_error = 0.0
+    correct_output_count = 0
+
+    for row_index in range(size):
+        row_pos = (0, target.origin_y + row_index)
+        row_ready = row_pos in occupied_set and cell_types.get(row_pos) == 1
+        row_vector = tuple(case.a[row_index]) if row_ready else tuple(0.0 for _ in range(size))
+        computed_row: list[float] = []
+        for col_index in range(size):
+            col_pos = (target.origin_x + col_index, 0)
+            output_pos = (target.origin_x + col_index, target.origin_y + row_index)
+            column_ready = col_pos in occupied_set and cell_types.get(col_pos) == 1
+            output_ready = output_pos in occupied_set and cell_types.get(output_pos) == 0
+            column_vector = columns[col_index] if column_ready else tuple(0.0 for _ in range(size))
+            predicted = sum(row_vector[k] * column_vector[k] for k in range(size)) if output_ready else 0.0
+            expected_value = expected[row_index][col_index]
+            computed_row.append(predicted)
+            matrix_error += abs(predicted - expected_value)
+            if abs(predicted - expected_value) < 1e-9:
+                correct_output_count += 1
+        computed_rows.append(tuple(computed_row))
+
+    return tuple(computed_rows), matrix_error, correct_output_count
 
 
 def _layout_error(occupied: Sequence[tuple[int, int]], target: MatrixFabricTarget) -> tuple[float, int, int]:
@@ -309,11 +393,59 @@ def _dropout_robustness(occupied: Sequence[tuple[int, int]], target: MatrixFabri
     return sum(scores) / len(scores)
 
 
+def _fabric_score(
+    *,
+    layout_error: float,
+    input_error: float,
+    role_error: float,
+    matrix_error: float,
+    correct_output_count: int,
+    missing_cells: int,
+    extra_cells: int,
+    missing_inputs: int,
+    motif_reuse_total: int,
+    dropout_robustness: float,
+    curriculum_phase: str,
+) -> float:
+    motif_bonus = 0.25 * motif_reuse_total
+    if curriculum_phase == "structure":
+        matrix_weight = 0.0
+        output_weight = 0.0
+        layout_weight = 1.25
+        input_weight = 1.25
+        role_weight = 1.25
+        missing_weight = 1.5
+        extra_weight = 0.5
+        dropout_weight = 0.75
+    else:
+        matrix_weight = 0.75
+        output_weight = 0.25
+        layout_weight = 1.0
+        input_weight = 1.0
+        role_weight = 1.0
+        missing_weight = 1.25
+        extra_weight = 0.5
+        dropout_weight = 0.5
+    return (
+        matrix_weight * matrix_error
+        - output_weight * correct_output_count
+        + layout_weight * layout_error
+        + input_weight * input_error
+        + role_weight * role_error
+        + missing_weight * missing_cells
+        + extra_weight * extra_cells
+        + missing_weight * missing_inputs
+        - motif_bonus
+        - dropout_weight * dropout_robustness
+    )
+
+
 def evaluate_spatial_matrix_fabric(
     genome: CellGenome,
     target: MatrixFabricTarget,
     *,
     seed: int,
+    curriculum_phase: str = "full",
 ) -> MatrixFabricEvaluation:
     report = run_spatial_development(
         width=target.grid_size,
@@ -329,15 +461,34 @@ def evaluate_spatial_matrix_fabric(
     dropout_robustness = _dropout_robustness(report.occupied_positions, target)
     outputs: list[tuple[tuple[float, ...], ...]] = []
     matrix_error = 0.0
+    correct_output_count = 0
     for case in target.test_cases:
-        expected = _matrix_multiply(case.a, case.b)
-        outputs.append(expected)
-        matrix_error += 0.0 if layout_error == 0.0 else layout_error
+        computed, case_error, case_correct = _fabric_compute_case(report, target, case)
+        outputs.append(computed)
+        matrix_error += case_error
+        correct_output_count += case_correct
     motif_reuse_total = sum(motif.reuse_count for motif in genome.local_motifs)
-    motif_bonus = 0.25 * motif_reuse_total
-    score = layout_error + input_error + role_error + matrix_error + 1.25 * missing_cells + 0.5 * extra_cells + 1.25 * missing_inputs - motif_bonus - 0.5 * dropout_robustness
-    score = max(0.0, score)
-    exact_match = layout_error == 0.0 and input_error == 0.0 and missing_cells == 0 and extra_cells == 0 and role_error == 0.0
+    score = _fabric_score(
+        layout_error=layout_error,
+        input_error=input_error,
+        role_error=role_error,
+        matrix_error=matrix_error,
+        correct_output_count=correct_output_count,
+        missing_cells=missing_cells,
+        extra_cells=extra_cells,
+        missing_inputs=missing_inputs,
+        motif_reuse_total=motif_reuse_total,
+        dropout_robustness=dropout_robustness,
+        curriculum_phase=curriculum_phase,
+    )
+    exact_match = (
+        matrix_error == 0.0
+        and layout_error == 0.0
+        and input_error == 0.0
+        and missing_cells == 0
+        and extra_cells == 0
+        and role_error == 0.0
+    )
     return MatrixFabricEvaluation(
         genome=genome,
         score=score,
@@ -347,6 +498,7 @@ def evaluate_spatial_matrix_fabric(
         output_error=output_role_error,
         role_error=role_error,
         matrix_error=matrix_error,
+        correct_output_count=correct_output_count,
         missing_cells=missing_cells,
         extra_cells=extra_cells,
         dropout_robustness=dropout_robustness,
@@ -356,8 +508,14 @@ def evaluate_spatial_matrix_fabric(
     )
 
 
-def _build_fabric_founder(*, lineage_id: str, rng: Random) -> CellGenome:
-    motif = list(rng.choice(SAFE_FABRIC_MOTIFS))
+def _build_fabric_founder(
+    *,
+    lineage_id: str,
+    rng: Random,
+    rail_bias_fraction: float = 0.7,
+) -> CellGenome:
+    motif_source = FABRIC_RAIL_MOTIFS if rng.random() < rail_bias_fraction else SAFE_FABRIC_MOTIFS
+    motif = list(rng.choice(motif_source))
     if rng.random() < 0.5:
         motif.insert(rng.randrange(len(motif) + 1), "NOOP")
     codons = tuple(
@@ -377,14 +535,14 @@ def _build_fabric_founder(*, lineage_id: str, rng: Random) -> CellGenome:
     if len(codons) < 6:
         codons = codons + tuple(random_codons(rng, 6 - len(codons), modulus=16))
     motif_record = extract_motif_from_rules(motif, origin_lineage=lineage_id, origin_task="spatial_matrix_fabric")
-    return CellGenome(codons=codons, local_motifs=(motif_record,), lineage_id=lineage_id)
+    return _normalize_motifs(CellGenome(codons=codons, local_motifs=(motif_record,), lineage_id=lineage_id), limit=4)
 
 
 def _attach_restart_motifs(genome: CellGenome, motifs: Sequence[Motif], *, limit: int = 2) -> CellGenome:
     attached = genome
     for motif in motifs[:limit]:
         attached = attached.attach_motif(motif.inherit())
-    return attached
+    return _normalize_motifs(attached)
 
 
 def _attach_shared_motifs(genome: CellGenome, motifs: Sequence[Motif], *, limit: int = 2) -> CellGenome:
@@ -409,7 +567,7 @@ def _mutate_fabric_genome(
         deletion_rate=deletion_rate,
         motif_mutation_rate=0.1,
     )
-    return mutated.with_lineage(lineage_id)
+    return _normalize_motifs(mutated.with_lineage(lineage_id))
 
 
 def _format_active_ops(genome: CellGenome) -> tuple[str, ...]:
@@ -441,7 +599,11 @@ def run_spatial_matrix_fabric_search(
         founder_count = max(1, min(config.population_size, int(round(config.population_size * config.founder_fraction))))
         biased_count = max(1, min(founder_count, int(round(founder_count * config.founder_bias_fraction))))
         for index in range(biased_count):
-            founder = _build_fabric_founder(lineage_id=f"F{restart}B{index + 1}", rng=rng)
+            founder = _build_fabric_founder(
+                lineage_id=f"F{restart}B{index + 1}",
+                rng=rng,
+                rail_bias_fraction=config.founder_rail_bias_fraction,
+            )
             if shared_motifs:
                 transferred = min(2, len(shared_motifs))
                 founder = _attach_restart_motifs(founder, rng.sample(shared_motifs, k=transferred), limit=transferred)
@@ -469,11 +631,13 @@ def run_spatial_matrix_fabric_search(
             population.append(founder)
 
         for generation in range(config.generations):
+            curriculum_phase = "structure" if generation < config.curriculum_generations else "full"
             evaluations = [
                 evaluate_spatial_matrix_fabric(
                     genome,
                     target,
                     seed=seed + restart * 101 + generation,
+                    curriculum_phase=curriculum_phase,
                 )
                 for genome in population
             ]
@@ -517,7 +681,7 @@ def run_spatial_matrix_fabric_search(
             population = next_population
 
         if best_genome is not None and best_genome.local_motifs:
-            shared_motifs.extend(best_genome.local_motifs)
+            shared_motifs = _normalize_motif_pool(shared_motifs + list(best_genome.local_motifs))
             restart_motif_pool_size = len(shared_motifs)
 
     assert best is not None
@@ -542,11 +706,14 @@ def run_spatial_matrix_fabric_search(
             "output_error": best.output_error,
             "role_error": best.role_error,
             "matrix_error": best.matrix_error,
+            "correct_output_count": best.correct_output_count,
             "missing_cells": best.missing_cells,
             "extra_cells": best.extra_cells,
             "dropout_robustness": best.dropout_robustness,
             "restart_motif_transfer_count": restart_motif_transfer_count,
             "restart_motif_pool_size": restart_motif_pool_size,
+            "curriculum_generations": config.curriculum_generations,
+            "founder_rail_bias_fraction": config.founder_rail_bias_fraction,
             **motif_statistics(best_genome.local_motifs),
         },
     )
@@ -590,7 +757,13 @@ def run_spatial_matrix_fabric_stream(
     biased_count = max(1, min(founder_count, int(round(founder_count * config.founder_bias_fraction))))
     population: list[CellGenome] = []
     for index in range(biased_count):
-        population.append(_build_fabric_founder(lineage_id=f"F0B{index + 1}", rng=rng))
+        population.append(
+            _build_fabric_founder(
+                lineage_id=f"F0B{index + 1}",
+                rng=rng,
+                rail_bias_fraction=config.founder_rail_bias_fraction,
+            )
+        )
     while len(population) < founder_count:
         population.append(
             build_spatial_genome(
@@ -634,7 +807,7 @@ def run_spatial_matrix_fabric_stream(
             survivors = _select_diverse_survivors(evaluations, k=config.survivor_count)
             if survivors:
                 survivors = list(survivors)
-                survivors[0] = attach_success_motif(survivors[0], task.label)
+                survivors[0] = _normalize_motifs(attach_success_motif(survivors[0], task.label))
             next_population: list[CellGenome] = []
             while len(next_population) < config.population_size and survivors:
                 parent = rng.choice(survivors)
@@ -667,6 +840,7 @@ def run_spatial_matrix_fabric_stream(
                     if transferred > 0:
                         child = _attach_shared_motifs(child, rng.sample(shared_motifs, k=transferred), limit=transferred)
                         shared_motif_transfer_count += transferred
+                child = _normalize_motifs(child)
                 next_population.append(child)
             if next_population:
                 population = next_population
@@ -675,7 +849,7 @@ def run_spatial_matrix_fabric_stream(
 
         assert episode_best is not None
         if episode_best.genome.local_motifs:
-            shared_motifs.extend(episode_best.genome.local_motifs)
+            shared_motifs = _normalize_motif_pool(shared_motifs + list(episode_best.genome.local_motifs))
         episodes.append(
             MatrixFabricStreamEpisode(
                 episode_index=episode_index + 1,
@@ -697,6 +871,7 @@ def run_spatial_matrix_fabric_stream(
                     "output_error": episode_best.output_error,
                     "role_error": episode_best.role_error,
                     "matrix_error": episode_best.matrix_error,
+                    "correct_output_count": episode_best.correct_output_count,
                     "missing_cells": episode_best.missing_cells,
                     "extra_cells": episode_best.extra_cells,
                     "dropout_robustness": episode_best.dropout_robustness,
@@ -739,6 +914,7 @@ def run_spatial_matrix_fabric_stream(
             "best_output_error": best.output_error,
             "best_role_error": best.role_error,
             "best_dropout_robustness": best.dropout_robustness,
+            "founder_rail_bias_fraction": config.founder_rail_bias_fraction,
             **motif_statistics(best_genome.local_motifs),
         },
     )

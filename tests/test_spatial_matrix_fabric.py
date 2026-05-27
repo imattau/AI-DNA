@@ -27,6 +27,7 @@ def test_matrix_fabric_evaluator_runs_on_a_spatial_genome() -> None:
     assert evaluation.input_error >= 0.0
     assert evaluation.output_error >= 0.0
     assert evaluation.dropout_robustness >= 0.0
+    assert evaluation.correct_output_count >= 0
     assert len(evaluation.trace_examples) <= 8
 
 
@@ -38,8 +39,10 @@ def test_matrix_fabric_search_report_renders() -> None:
             population_size=6,
             restarts=2,
             generations=2,
+            curriculum_generations=1,
             survivor_count=2,
             siblings_per_survivor=2,
+            founder_rail_bias_fraction=0.9,
         ),
     )
     assert report.target_positions
@@ -50,4 +53,7 @@ def test_matrix_fabric_search_report_renders() -> None:
     assert "role_error" in report.extra
     assert "restart_motif_transfer_count" in report.extra
     assert "restart_motif_pool_size" in report.extra
+    assert "correct_output_count" in report.extra
+    assert "curriculum_generations" in report.extra
+    assert "founder_rail_bias_fraction" in report.extra
     assert report.format_text().startswith("experiment:")
