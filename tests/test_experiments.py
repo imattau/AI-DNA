@@ -27,6 +27,9 @@ def test_remaining_experiments_run() -> None:
         "18_spatial_matrix_fabric.py",
         "19_spatial_matrix_fabric_stream.py",
         "20_spatial_self_repair.py",
+        "22_spatial_roaming.py",
+        "23_spatial_adhesion.py",
+        "24_spatial_routing.py",
     ]
     for script_name in scripts:
         completed = subprocess.run(

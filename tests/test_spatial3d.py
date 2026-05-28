@@ -43,3 +43,42 @@ def test_spatial3d_demo_report_runs() -> None:
     assert report.cells
     assert report.occupied_positions
     assert report.format_text().startswith("spatial3d_development:")
+
+
+def test_spatial3d_wander_moves_cell() -> None:
+    genome = build_spatial3d_genome(("WANDER", "HALT"), lineage_id="VW")
+    arena = Spatial3DArena(width=4, height=4, depth=4)
+    assert arena.place(Spatial3DCell(genome=genome, x=2, y=2, z=2))
+    arena.run(steps=1)
+    assert (2, 2, 2) not in arena.cells
+    assert len(arena.cells) == 1
+
+
+def test_spatial3d_adhesion_cell_clusters_on_signal() -> None:
+    arena = Spatial3DArena(width=4, height=4, depth=4)
+    mover = Spatial3DCell(
+        genome=build_spatial3d_genome(("SENSE_0", "ADHERE", "SENSE_0", "ADHERE", "HALT"), lineage_id="VA"),
+        x=1,
+        y=2,
+        z=2,
+    )
+    anchor = Spatial3DCell(genome=build_spatial3d_genome(("HALT",), lineage_id="VA0"), x=3, y=2, z=2)
+    assert arena.place(mover)
+    assert arena.place(anchor)
+    arena.morphogen_field.emit(1, 2, 2, 1.0)
+    before_neighbors = {
+        position
+        for position in arena.cells
+        if abs(position[0] - anchor.x) + abs(position[1] - anchor.y) + abs(position[2] - anchor.z) == 1
+    }
+    assert before_neighbors == set()
+    arena.run(steps=5)
+    assert (2, 2, 2) in arena.cells
+    assert len(arena.cells) == 2
+    after_neighbors = {
+        position
+        for position in arena.cells
+        if position != (3, 2, 2) and abs(position[0] - anchor.x) + abs(position[1] - anchor.y) + abs(position[2] - anchor.z) == 1
+    }
+    assert after_neighbors == {(2, 2, 2)}
+    assert any(entry["op"] == "ADHERE" for entry in arena.cells[(2, 2, 2)].trace)

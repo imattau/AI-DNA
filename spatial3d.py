@@ -34,6 +34,8 @@ SPATIAL3D_OPS: tuple[str, ...] = (
     "REPAIR_SOUTH",
     "REPAIR_UP",
     "REPAIR_DOWN",
+    "ADHERE",
+    "WANDER",
 )
 
 
@@ -213,6 +215,70 @@ class Spatial3DArena:
         self.cells[location] = child
         return True
 
+    def move_cell(self, cell: Spatial3DCell, dx: int, dy: int, dz: int) -> bool:
+        source = (cell.x, cell.y, cell.z)
+        target = self._wrap(cell.x + dx, cell.y + dy, cell.z + dz)
+        if target is None or target in self.cells:
+            return False
+        self.cells.pop(source, None)
+        cell.x, cell.y, cell.z = target
+        self.cells[target] = cell
+        return True
+
+    def _wander(self, cell: Spatial3DCell) -> tuple[int, int, int]:
+        directions = ((1, 0, 0), (0, 1, 0), (0, 0, 1), (-1, 0, 0), (0, -1, 0), (0, 0, -1))
+        offset = int(abs(sum(cell.registers)) + cell.age + cell.pc) % len(directions)
+        for attempt in range(len(directions)):
+            dx, dy, dz = directions[(offset + attempt) % len(directions)]
+            if self.move_cell(cell, dx, dy, dz):
+                return dx, dy, dz
+        return 0, 0, 0
+
+    def _adhere(self, cell: Spatial3DCell) -> tuple[int, int, int]:
+        directions = ((1, 0, 0), (0, 1, 0), (0, 0, 1), (-1, 0, 0), (0, -1, 0), (0, 0, -1))
+        if cell.registers[3] <= 0.0:
+            return 0, 0, 0
+        source = (cell.x, cell.y, cell.z)
+        others = [position for position in self.cells if position != source]
+        if not others:
+            return 0, 0, 0
+
+        def adjacent_occupied_count(x: int, y: int, z: int) -> int:
+            count = 0
+            for dx, dy, dz in directions:
+                neighbor = self._wrap(x + dx, y + dy, z + dz)
+                if neighbor is not None and neighbor in self.cells and neighbor != source:
+                    count += 1
+            return count
+
+        offset = int(abs(sum(cell.registers)) + cell.age + cell.pc) % len(directions)
+        for attempt in range(len(directions)):
+            dx, dy, dz = directions[(offset + attempt) % len(directions)]
+            target = self._wrap(cell.x + dx, cell.y + dy, cell.z + dz)
+            if target is None or target in self.cells:
+                continue
+            if adjacent_occupied_count(*target) > 0:
+                if self.move_cell(cell, dx, dy, dz):
+                    return dx, dy, dz
+
+        best_move: tuple[int, int, int] | None = None
+        best_distance: int | None = None
+        for attempt in range(len(directions)):
+            dx, dy, dz = directions[(offset + attempt) % len(directions)]
+            target = self._wrap(cell.x + dx, cell.y + dy, cell.z + dz)
+            if target is None or target in self.cells:
+                continue
+            distance = min(
+                abs(target[0] - ox) + abs(target[1] - oy) + abs(target[2] - oz)
+                for ox, oy, oz in others
+            )
+            if best_distance is None or distance < best_distance:
+                best_distance = distance
+                best_move = (dx, dy, dz)
+        if best_move is not None and self.move_cell(cell, *best_move):
+            return best_move
+        return 0, 0, 0
+
     def _execute(self, cell: Spatial3DCell) -> None:
         if not cell.alive or cell.halted or not cell.genome.codons:
             return
@@ -275,6 +341,12 @@ class Spatial3DArena:
             note = "repair_up" if self.spawn_child(cell, 0, 0, 1) else "repair_fail"
         elif op == "REPAIR_DOWN":
             note = "repair_down" if self.spawn_child(cell, 0, 0, -1) else "repair_fail"
+        elif op == "ADHERE":
+            dx, dy, dz = self._adhere(cell)
+            note = f"adhere={dx},{dy},{dz}" if (dx or dy or dz) else "adhere_fail"
+        elif op == "WANDER":
+            dx, dy, dz = self._wander(cell)
+            note = f"wander={dx},{dy},{dz}" if (dx or dy or dz) else "wander_fail"
         if tuple(cell.registers) != before or note:
             cell.trace.append(
                 {
@@ -335,6 +407,17 @@ def build_spatial3d_demo_genome(*, lineage_id: str = "V") -> CellGenome:
             "DIVIDE_EAST",
             "DIVIDE_UP",
             "DIVIDE_SOUTH",
+            "HALT",
+        ),
+        lineage_id=lineage_id,
+    )
+
+
+def build_spatial3d_adhesion_demo_genome(*, lineage_id: str = "AV") -> CellGenome:
+    return build_spatial3d_genome(
+        (
+            "SENSE_0",
+            "ADHERE",
             "HALT",
         ),
         lineage_id=lineage_id,

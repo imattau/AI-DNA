@@ -210,6 +210,21 @@ python3 experiments/13_cooperative_chemistry.py
 python3 experiments/09_matrix_multiplication_search.py
 ```
 
+### Spatial development and routing
+
+```bash
+python3 experiments/15_spatial_development.py
+python3 experiments/16_spatial3d_development.py
+python3 experiments/17_spatial_body_plan_search.py
+python3 experiments/18_spatial_matrix_fabric.py
+python3 experiments/19_spatial_matrix_fabric_stream.py
+python3 experiments/20_spatial_self_repair.py
+python3 experiments/21_spatial_matrix_fabric_solve.py
+python3 experiments/22_spatial_roaming.py
+python3 experiments/23_spatial_adhesion.py
+python3 experiments/24_spatial_routing.py
+```
+
 ## Testing
 
 Run the test suite with:
@@ -222,13 +237,23 @@ Useful focused tests:
 
 ```bash
 python3 -m pytest -q tests/test_codons.py
+python3 -m pytest -q tests/test_tasks.py
 python3 -m pytest -q tests/test_motifs.py
+python3 -m pytest -q tests/test_chemistry_and_colony.py
 python3 -m pytest -q tests/test_task_stream.py
 python3 -m pytest -q tests/test_contextual_task_stream.py
 python3 -m pytest -q tests/test_math_ecology.py
 python3 -m pytest -q tests/test_matrix_experiment.py
 python3 -m pytest -q tests/test_replication.py
 python3 -m pytest -q tests/test_cooperative_chemistry.py
+python3 -m pytest -q tests/test_spatial.py
+python3 -m pytest -q tests/test_spatial3d.py
+python3 -m pytest -q tests/test_spatial_body_plan.py
+python3 -m pytest -q tests/test_spatial_matrix_fabric.py
+python3 -m pytest -q tests/test_spatial_matrix_fabric_solve.py
+python3 -m pytest -q tests/test_spatial_matrix_fabric_stream.py
+python3 -m pytest -q tests/test_spatial_routing.py
+python3 -m pytest -q tests/test_spatial_self_repair.py
 ```
 
 ## Import Surface
@@ -260,11 +285,77 @@ That means the package can be used as a small library as well as a script-driven
 ## What It Does Not Yet Do
 
 - it does not provide a general mathematical reasoning engine
-- it does not have spatially local cell neighborhoods
 - it does not use a stochastic Gillespie-style chemistry simulator
 - it does not have a full developmental biology model
 - it does not have a global motif memory, by design
 - it does not guarantee discovery of minimal matrix-multiplication circuits on demand
+
+## Test Results And Implications
+
+This section records the current measured outcomes from the regression suite and the most informative experiment runs.
+
+### Measured Regression Results
+
+| Test block | Actual result | What it suggests |
+| --- | --- | --- |
+| `tests/test_codons.py` + `tests/test_tasks.py` + `tests/test_motifs.py` + `tests/test_chemistry_and_colony.py` | `12 passed in 7.94s` | The codon substrate, task bundles, motif bookkeeping, and chemistry/colony plumbing are internally consistent. |
+| `tests/test_task_stream.py` + `tests/test_contextual_task_stream.py` + `tests/test_math_ecology.py` + `tests/test_replication.py` + `tests/test_cooperative_chemistry.py` | `7 passed in 65.69s` | The system can survive changing tasks, contextual noise, replication, and shared chemistries in the same overall architecture. |
+| `tests/test_matrix_experiment.py -k 'not script'` | `3 passed, 1 deselected in 0.40s` | The matrix synthesis core and symbolic verifier are functioning without relying on the slower smoke-style script path. |
+| `tests/test_spatial.py` + `tests/test_spatial3d.py` + `tests/test_spatial_routing.py` | `15 passed in 1.06s` | The spatial substrate now supports development, roaming, adhesion, and signal routing in both 2D and 3D. |
+| `tests/test_spatial_body_plan.py` | `3 passed in 0.87s` | The 3D body-plan benchmark is exact and reproducible. |
+| `tests/test_spatial_self_repair.py` | `3 passed in 0.30s` | Local repair/regeneration works as an internal spatial behavior. |
+| `tests/test_spatial_matrix_fabric.py` | `3 passed in 2.95s` | The spatial fabric benchmark scaffold and scoring are valid. |
+| `tests/test_spatial_matrix_fabric_solve.py` | `1 passed in 0.21s` | The matrix-fabric solve harness executes cleanly even though the benchmark itself is still partial. |
+| `tests/test_spatial_matrix_fabric_stream.py` | `1 passed in 2.75s` | The changing spatial-task stream path is operational. |
+
+### Representative Experiment Outputs
+
+| Experiment | Actual outcome | Implication |
+| --- | --- | --- |
+| `experiments/01_multiply_persistent_rules.py` | exact multiply benchmark reaches zero validation error | The persistent-rule chemistry can solve a small arithmetic task exactly. |
+| `experiments/09_matrix_multiplication_search.py` | exploratory matrix search remains partial but runs without a seeded full solution | The platform is genuinely searching algorithm space rather than replaying an answer. |
+| `experiments/10_evolve_self_replication.py` | exact replication is reached by evolution | Self-replication can emerge through search. |
+| `experiments/13_cooperative_chemistry.py` | one cell sends and another receives in a shared context | Cells can coordinate through a common chemical environment. |
+| `experiments/17_spatial_body_plan_search.py` | exact body plan match | A single genome can grow a precise 3D spatial arrangement. |
+| `experiments/20_spatial_self_repair.py` | a removed neighbor is regenerated | The spatial substrate has internal repair, not just passive robustness. |
+| `experiments/23_spatial_adhesion.py` | signal-gated clustering occurs | Cells can join locally when the cue is present, without genome fusion. |
+| `experiments/24_spatial_routing.py` | exact routing solution | The spatial substrate can already solve a simple cooperative transport task end to end. |
+
+### What The Results Mean
+
+- The project now has a **single genetic substrate** but multiple phenotypes: chemistry, ecology, replication, cooperation, and spatial development.
+- The tests show the model is not only a toy arithmetic solver. It can also:
+  - adapt across changing tasks
+  - replicate
+  - cooperate
+  - repair
+  - develop spatial structure
+  - route signals through space
+- The hardest open problems are now clearly visible:
+  - general mathematical reasoning
+  - exact spatial matrix fabrication
+  - richer spatial neighborhoods and developmental regulation
+
+### Focused Regression Coverage
+
+The repository also includes focused tests for the main subsystems:
+
+- `tests/test_codons.py`
+- `tests/test_motifs.py`
+- `tests/test_task_stream.py`
+- `tests/test_contextual_task_stream.py`
+- `tests/test_math_ecology.py`
+- `tests/test_matrix_experiment.py`
+- `tests/test_replication.py`
+- `tests/test_cooperative_chemistry.py`
+- `tests/test_spatial.py`
+- `tests/test_spatial3d.py`
+- `tests/test_spatial_body_plan.py`
+- `tests/test_spatial_matrix_fabric.py`
+- `tests/test_spatial_matrix_fabric_solve.py`
+- `tests/test_spatial_matrix_fabric_stream.py`
+- `tests/test_spatial_routing.py`
+- `tests/test_spatial_self_repair.py`
 
 ## Design Principles
 
@@ -296,8 +387,11 @@ The project is beyond the stub stage and now includes:
 - self-replication
 - adaptive math ecology
 - a matrix benchmark with symbolic verification
+- a set of spatial developmental benchmarks
+- exact spatial routing
+- local adhesion and repair
 
-The remaining work is mostly about making the search better and the environments richer, not about making the core system exist.
+The remaining work is mostly about making the search better, the environments richer, and the spatial organisms more capable, not about making the core system exist.
 
 ## Roadmap
 
@@ -309,6 +403,7 @@ The most valuable remaining extensions are:
 4. broader math ecologies
 5. better search pressure without seeding full solutions
 6. more informative lineage and forgetting metrics
+7. richer spatial neighborhoods and task-linked multicell coordination
 
 ## Notes on the Checklist
 

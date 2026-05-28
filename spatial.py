@@ -28,6 +28,8 @@ SPATIAL_OPS: tuple[str, ...] = (
     "REPAIR_WEST",
     "REPAIR_NORTH",
     "REPAIR_SOUTH",
+    "ADHERE",
+    "WANDER",
 )
 
 
@@ -189,6 +191,67 @@ class SpatialArena:
         self.cells[location] = child
         return True
 
+    def move_cell(self, cell: SpatialCell, dx: int, dy: int) -> bool:
+        source = (cell.x, cell.y)
+        target = self._wrap(cell.x + dx, cell.y + dy)
+        if target is None or target in self.cells:
+            return False
+        self.cells.pop(source, None)
+        cell.x, cell.y = target
+        self.cells[target] = cell
+        return True
+
+    def _wander(self, cell: SpatialCell) -> tuple[int, int]:
+        directions = ((1, 0), (0, 1), (-1, 0), (0, -1))
+        offset = int(abs(sum(cell.registers)) + cell.age + cell.pc) % len(directions)
+        for attempt in range(len(directions)):
+            dx, dy = directions[(offset + attempt) % len(directions)]
+            if self.move_cell(cell, dx, dy):
+                return dx, dy
+        return 0, 0
+
+    def _adhere(self, cell: SpatialCell) -> tuple[int, int]:
+        directions = ((1, 0), (0, 1), (-1, 0), (0, -1))
+        if cell.registers[2] <= 0.0:
+            return 0, 0
+        source = (cell.x, cell.y)
+        others = [position for position in self.cells if position != source]
+        if not others:
+            return 0, 0
+
+        def adjacent_occupied_count(x: int, y: int) -> int:
+            count = 0
+            for dx, dy in directions:
+                neighbor = self._wrap(x + dx, y + dy)
+                if neighbor is not None and neighbor in self.cells and neighbor != source:
+                    count += 1
+            return count
+
+        offset = int(abs(sum(cell.registers)) + cell.age + cell.pc) % len(directions)
+        for attempt in range(len(directions)):
+            dx, dy = directions[(offset + attempt) % len(directions)]
+            target = self._wrap(cell.x + dx, cell.y + dy)
+            if target is None or target in self.cells:
+                continue
+            if adjacent_occupied_count(*target) > 0:
+                if self.move_cell(cell, dx, dy):
+                    return dx, dy
+
+        best_move: tuple[int, int] | None = None
+        best_distance: int | None = None
+        for attempt in range(len(directions)):
+            dx, dy = directions[(offset + attempt) % len(directions)]
+            target = self._wrap(cell.x + dx, cell.y + dy)
+            if target is None or target in self.cells:
+                continue
+            distance = min(abs(target[0] - ox) + abs(target[1] - oy) for ox, oy in others)
+            if best_distance is None or distance < best_distance:
+                best_distance = distance
+                best_move = (dx, dy)
+        if best_move is not None and self.move_cell(cell, *best_move):
+            return best_move
+        return 0, 0
+
     def _execute(self, cell: SpatialCell) -> None:
         if not cell.alive or cell.halted or not cell.genome.codons:
             return
@@ -239,6 +302,12 @@ class SpatialArena:
             note = "repair_north" if self.spawn_child(cell, 0, -1) else "repair_fail"
         elif op == "REPAIR_SOUTH":
             note = "repair_south" if self.spawn_child(cell, 0, 1) else "repair_fail"
+        elif op == "ADHERE":
+            dx, dy = self._adhere(cell)
+            note = f"adhere={dx},{dy}" if (dx or dy) else "adhere_fail"
+        elif op == "WANDER":
+            dx, dy = self._wander(cell)
+            note = f"wander={dx},{dy}" if (dx or dy) else "wander_fail"
         else:
             pass
         if tuple(cell.registers) != before or note:
@@ -310,6 +379,31 @@ def build_spatial_repair_demo_genome(*, lineage_id: str = "R") -> CellGenome:
             "REPAIR_EAST",
             "REPAIR_SOUTH",
             "SENSE_0",
+        ),
+        lineage_id=lineage_id,
+    )
+
+
+def build_spatial_roaming_demo_genome(*, lineage_id: str = "W") -> CellGenome:
+    return build_spatial_genome(
+        (
+            "WANDER",
+            "GET_X",
+            "GET_Y",
+            "WANDER",
+            "WANDER",
+            "HALT",
+        ),
+        lineage_id=lineage_id,
+    )
+
+
+def build_spatial_adhesion_demo_genome(*, lineage_id: str = "A") -> CellGenome:
+    return build_spatial_genome(
+        (
+            "SENSE_0",
+            "ADHERE",
+            "HALT",
         ),
         lineage_id=lineage_id,
     )

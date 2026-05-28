@@ -5,8 +5,10 @@ from spatial import (
     MorphogenField,
     SpatialArena,
     SpatialCell,
+    build_spatial_adhesion_demo_genome,
     build_spatial_demo_genome,
     build_spatial_genome,
+    build_spatial_roaming_demo_genome,
     decode_spatial_op,
     run_spatial_development,
 )
@@ -44,3 +46,69 @@ def test_spatial_demo_report_runs() -> None:
     assert report.cells
     assert report.occupied_positions
     assert report.format_text().startswith("spatial_development:")
+
+
+def test_spatial_roaming_cell_moves_through_space() -> None:
+    arena = SpatialArena(width=6, height=6)
+    assert arena.place(SpatialCell(genome=build_spatial_roaming_demo_genome(), x=2, y=2))
+    arena.run(steps=2)
+    assert len(arena.cells) == 1
+    assert (2, 2) not in arena.cells
+    assert arena.cells
+
+
+def test_spatial_adhesion_cell_clusters_on_signal() -> None:
+    arena = SpatialArena(width=5, height=5)
+    mover = SpatialCell(genome=build_spatial_adhesion_demo_genome(), x=1, y=2)
+    anchor = SpatialCell(genome=build_spatial_genome(("HALT",), lineage_id="A0"), x=3, y=2)
+    assert arena.place(mover)
+    assert arena.place(anchor)
+    arena.morphogen_field.emit(1, 2, 1.0)
+    before_neighbors = {
+        position
+        for position in arena.cells
+        if abs(position[0] - anchor.x) + abs(position[1] - anchor.y) == 1
+    }
+    assert before_neighbors == set()
+    arena.run(steps=2)
+    assert (2, 2) in arena.cells
+    assert len(arena.cells) == 2
+    after_neighbors = {
+        position
+        for position in arena.cells
+        if position != (3, 2) and abs(position[0] - anchor.x) + abs(position[1] - anchor.y) == 1
+    }
+    assert after_neighbors == {(2, 2)}
+    assert any(entry["op"] == "ADHERE" for entry in arena.cells[(2, 2)].trace)
+
+
+def test_spatial_adhesion_requires_partner_signal() -> None:
+    solo_arena = SpatialArena(width=6, height=5)
+    solo = SpatialCell(
+        genome=build_spatial_genome(("SENSE_0", "ADHERE", "SENSE_0", "ADHERE", "HALT"), lineage_id="ASOLO"),
+        x=2,
+        y=2,
+    )
+    assert solo_arena.place(solo)
+    solo_arena.run(steps=3)
+    assert (2, 2) in solo_arena.cells
+    assert len(solo_arena.cells) == 1
+
+    cooperative_arena = SpatialArena(width=6, height=5)
+    receiver = SpatialCell(
+        genome=build_spatial_genome(("SENSE_0", "ADHERE", "SENSE_0", "ADHERE", "HALT"), lineage_id="ARECV"),
+        x=2,
+        y=2,
+    )
+    sender = SpatialCell(
+        genome=build_spatial_genome(("EMIT_0", "EMIT_0", "HALT"), lineage_id="ASEND"),
+        x=4,
+        y=2,
+    )
+    assert cooperative_arena.place(receiver)
+    assert cooperative_arena.place(sender)
+    cooperative_arena.run(steps=5)
+    assert (3, 2) in cooperative_arena.cells
+    assert (4, 2) in cooperative_arena.cells
+    assert any(entry["op"] == "ADHERE" and "adhere=" in entry["note"] for entry in cooperative_arena.cells[(3, 2)].trace)
+    assert cooperative_arena.cells[(3, 2)].trace
