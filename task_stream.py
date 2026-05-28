@@ -4,10 +4,12 @@ from dataclasses import dataclass, field
 from random import Random
 from typing import Callable, Sequence
 
+from cell import CellState
+from chemistry import ChemistrySystem
 from evolution import Evaluation, EvolutionConfig, mixed_initial_population, mutate_genome, random_genome
-from evolution import attach_success_motif
+from evolution import attach_success_motif, estimate_neutrality
 from genome import CellGenome, format_motif, motif_statistics
-from tasks import ContextualTask, TaskBundle, TaskContext, materialize_contextual_bundle
+from tasks import ContextualTask, TaskBundle, TaskContext, TaskCase, materialize_contextual_bundle
 
 
 @dataclass(slots=True)
@@ -48,6 +50,8 @@ class StreamTaskResult:
     motif_transfer_ratio: float = 0.0
     motif_origin_tasks: tuple[str, ...] = ()
     motif_origin_lineages: tuple[str, ...] = ()
+    phenotype_diversity: float = 0.0
+    recovery_steps: int = 0
 
 
 @dataclass(slots=True)
@@ -73,6 +77,7 @@ class ArchiveSnapshot:
     motif_transfer_ratio: float = 0.0
     motif_origin_tasks: tuple[str, ...] = ()
     motif_origin_lineages: tuple[str, ...] = ()
+    neutral_drift_rate: float = 0.0
 
 
 @dataclass(slots=True)
@@ -99,6 +104,8 @@ class StreamReport:
                 f"forgetting_delta={result.forgetting_delta:.6f} "
                 f"transfer_scores={result.lineage_transfer_scores or '<none>'} "
                 f"resource_regen={result.resource_regen:.2f} "
+                f"phenotype_diversity={result.phenotype_diversity:.4f} "
+                f"recovery_steps={result.recovery_steps} "
                 f"motifs={result.motif_count} reuse_total={result.motif_reuse_total} "
                 f"transfer={result.motif_transfer_count}/{result.motif_count if result.motif_count else 0} "
                 f"motif_reappearance={result.motif_reappearance_count} "
@@ -109,19 +116,20 @@ class StreamReport:
             lines.append("archive:")
             for snapshot in self.archive_snapshots:
                 lines.append(
-                    f"  - gen {snapshot.generation} task={snapshot.current_task} "
-                    f"mean_archive_error={snapshot.mean_archive_error:.6f} best={snapshot.best_lineage} "
-                    f"energy_efficiency={snapshot.energy_efficiency:.4f} "
-                    f"lineage_efficiency={snapshot.lineage_efficiency:.4f} "
-                    f"lineage_root={snapshot.lineage_root or '<none>'} "
-                    f"forgetting_delta={snapshot.forgetting_delta:.6f} "
-                    f"transfer_scores={snapshot.lineage_transfer_scores or '<none>'} "
-                    f"resource_regen={snapshot.resource_regen:.2f} "
-                    f"motifs={snapshot.motif_count} reuse_total={snapshot.motif_reuse_total} "
-                    f"transfer={snapshot.motif_transfer_count}/{snapshot.motif_count if snapshot.motif_count else 0} "
-                    f"motif_reappearance={snapshot.motif_reappearance_count} "
-                    f"motif_tasks={','.join(snapshot.motif_origin_tasks) if snapshot.motif_origin_tasks else '<none>'} "
-                    f"motif_lineages={','.join(snapshot.motif_origin_lineages) if snapshot.motif_origin_lineages else '<none>'}"
+                f"  - gen {snapshot.generation} task={snapshot.current_task} "
+                f"mean_archive_error={snapshot.mean_archive_error:.6f} best={snapshot.best_lineage} "
+                f"energy_efficiency={snapshot.energy_efficiency:.4f} "
+                f"lineage_efficiency={snapshot.lineage_efficiency:.4f} "
+                f"lineage_root={snapshot.lineage_root or '<none>'} "
+                f"forgetting_delta={snapshot.forgetting_delta:.6f} "
+                f"transfer_scores={snapshot.lineage_transfer_scores or '<none>'} "
+                f"resource_regen={snapshot.resource_regen:.2f} "
+                f"neutral_drift_rate={snapshot.neutral_drift_rate:.4f} "
+                f"motifs={snapshot.motif_count} reuse_total={snapshot.motif_reuse_total} "
+                f"transfer={snapshot.motif_transfer_count}/{snapshot.motif_count if snapshot.motif_count else 0} "
+                f"motif_reappearance={snapshot.motif_reappearance_count} "
+                f"motif_tasks={','.join(snapshot.motif_origin_tasks) if snapshot.motif_origin_tasks else '<none>'} "
+                f"motif_lineages={','.join(snapshot.motif_origin_lineages) if snapshot.motif_origin_lineages else '<none>'}"
                 )
         lines.append(f"lineage_edges: {self.lineage_edges}")
         lines.append(f"final_cells: {len(self.final_population)}")
@@ -157,6 +165,71 @@ class StreamConfig:
     regen_error_sensitivity: float = 0.4
     regen_birth_bonus: float = 0.15
     lineage_efficiency_sensitivity: float = 0.35
+    estimate_neutrality_trials: int = 8
+
+
+def _probe_prediction(
+    genome: CellGenome,
+    *,
+    x: float = 2.0,
+    y: float = 3.0,
+    chemistry_max_time: float,
+    chemistry_dt: float,
+) -> float:
+    chemistry = ChemistrySystem(max_time=chemistry_max_time, dt=chemistry_dt)
+    cell = CellState(active_rules=list(genome.declare_rules()))
+    probe = TaskCase(x=x, y=y, target=x * y, task_name="probe")
+    cell.reset(x=x, y=y)
+    chemistry.run(cell, probe)
+    return float(cell.output if cell.output is not None else cell.signals[2])
+
+
+def _probe_signature(
+    genome: CellGenome,
+    *,
+    chemistry_max_time: float,
+    chemistry_dt: float,
+) -> tuple[float, ...]:
+    probe_points = ((2.0, 3.0), (5.0, 8.0), (8.0, 5.0), (11.0, 4.0))
+    return tuple(
+        _probe_prediction(
+            genome,
+            x=x,
+            y=y,
+            chemistry_max_time=chemistry_max_time,
+            chemistry_dt=chemistry_dt,
+        )
+        for x, y in probe_points
+    )
+
+
+def _phenotype_diversity(
+    cells: Sequence[StreamCell],
+    *,
+    chemistry_max_time: float,
+    chemistry_dt: float,
+) -> float:
+    live = [cell for cell in cells if cell.alive]
+    if len(live) < 2:
+        return 0.0
+    signatures = [
+        _probe_signature(
+            cell.genome,
+            chemistry_max_time=chemistry_max_time,
+            chemistry_dt=chemistry_dt,
+        )
+        for cell in live
+    ]
+    pairwise_sum = 0.0
+    pairwise_count = 0
+    for index, left in enumerate(signatures):
+        for right in signatures[index + 1 :]:
+            pairwise_sum += sum(abs(left_value - right_value) for left_value, right_value in zip(left, right, strict=False))
+            pairwise_count += 1
+    if pairwise_count == 0:
+        return 0.0
+    scale = max(1.0, max(abs(output) for signature in signatures for output in signature))
+    return min(1.0, (pairwise_sum / pairwise_count / max(1, len(signatures[0]))) / scale)
 
 
 @dataclass(slots=True)
@@ -316,10 +389,17 @@ def evaluate_stream_cell(
     *,
     chemistry_max_time: float,
     chemistry_dt: float,
+    include_neutrality: bool = False,
 ) -> Evaluation:
     from experiments.runner import evaluate_genome
 
-    return evaluate_genome(genome, bundle, max_time=chemistry_max_time, dt=chemistry_dt)
+    return evaluate_genome(
+        genome,
+        bundle,
+        max_time=chemistry_max_time,
+        dt=chemistry_dt,
+        include_neutrality=include_neutrality,
+    )
 
 
 def task_reward(error: float, *, reward_scale: float) -> float:
@@ -477,6 +557,7 @@ def run_task_stream(
     archive_snapshots: list[ArchiveSnapshot] = []
     seen_motif_patterns: set[tuple[str, ...]] = set()
     previous_transfer_scores: dict[str, float] = {}
+    previous_task_best_error: float | None = None
     global_generation = 0
     adaptive_regen = config.resource_regen
     for step_index, bundle in enumerate(tasks):
@@ -488,6 +569,8 @@ def run_task_stream(
         lineage_efficiency = 0.0
         lineage_root = ""
         lineage_efficiency_count = 0
+        phenotype_diversity = 0.0
+        recovery_steps = 0
 
         for _local_step in range(config.max_steps_per_task):
             resource_pool = min(config.resource_capacity, resource_pool + adaptive_regen)
@@ -510,6 +593,11 @@ def run_task_stream(
             live = [cell for cell, _, _ in evaluations if cell.alive]
             live.sort(key=lambda cell: cell.energy, reverse=True)
             survivors = live
+            phenotype_diversity = _phenotype_diversity(
+                survivors,
+                chemistry_max_time=chemistry_max_time,
+                chemistry_dt=chemistry_dt,
+            )
             lineage_root, lineage_efficiency, lineage_efficiency_count = _lineage_efficiency_summary(survivors)
             representatives = _best_lineage_representatives(survivors)
             seen_bundles = tasks[: step_index + 1]
@@ -523,6 +611,10 @@ def run_task_stream(
             previous_best_transfer_score = previous_transfer_scores.get(lineage_root, 0.0) if lineage_root else 0.0
             forgetting_delta = previous_best_transfer_score - best_transfer_score
             motif_reappearance_count, motif_reappearance_by_root = _motif_reappearance_summary(survivors, seen_motif_patterns)
+            if previous_task_best_error is not None and not recovery_steps and evaluations:
+                step_best_error = min(error for _, _, error in evaluations)
+                if step_best_error <= previous_task_best_error:
+                    recovery_steps = _local_step + 1
 
             if survivors:
                 top_survivor = survivors[0]
@@ -550,6 +642,20 @@ def run_task_stream(
                 )
                 if representative is not None:
                     motif_summary = _motif_summary(representative.genome.local_motifs, seen_motif_patterns)
+                    neutral_drift_rate = 0.0
+                    if config.estimate_neutrality_trials > 0:
+                        neutral_drift_rate = estimate_neutrality(
+                            representative.genome,
+                            lambda candidate: evaluate_stream_cell(
+                                candidate,
+                                bundle,
+                                chemistry_max_time=chemistry_max_time,
+                                chemistry_dt=chemistry_dt,
+                                include_neutrality=False,
+                            ),
+                            rng,
+                            trials=config.estimate_neutrality_trials,
+                        )
                     per_task_errors: list[tuple[str, float]] = []
                     for seen_bundle in seen_bundles:
                         archive_eval = evaluate_stream_cell(
@@ -577,6 +683,7 @@ def run_task_stream(
                             motif_reappearance_count=motif_reappearance_count,
                             motif_reappearance_by_root=motif_reappearance_by_root,
                             resource_regen=adaptive_regen,
+                            neutral_drift_rate=neutral_drift_rate,
                             motif_count=motif_summary["motif_count"],
                             motif_reuse_total=motif_summary["motif_reuse_total"],
                             motif_transfer_count=motif_summary["motif_transfer_count"],
@@ -610,6 +717,8 @@ def run_task_stream(
                 motif_reappearance_count=motif_reappearance_count,
                 motif_reappearance_by_root=motif_reappearance_by_root,
                 resource_regen=adaptive_regen,
+                phenotype_diversity=phenotype_diversity,
+                recovery_steps=recovery_steps if previous_task_best_error is not None else 0,
                 **_motif_result_fields(
                     next(
                         (cell.genome.local_motifs for cell in colony.members if cell.alive and cell.genome.local_motifs),
@@ -619,6 +728,8 @@ def run_task_stream(
                 ),
             )
         )
+        if previous_task_best_error is not None and results[-1].recovery_steps == 0:
+            results[-1].recovery_steps = config.max_steps_per_task
 
         adaptive_regen = _adaptive_regen(
             config,
@@ -626,6 +737,7 @@ def run_task_stream(
             births=births,
             lineage_efficiency=lineage_efficiency,
         )
+        previous_task_best_error = results[-1].best_error
         for root, score in lineage_transfer_scores:
             previous_transfer_scores[root] = score
 
@@ -668,6 +780,7 @@ def run_contextual_task_stream(
     archive_snapshots: list[ArchiveSnapshot] = []
     seen_motif_patterns: set[tuple[str, ...]] = set()
     previous_transfer_scores: dict[str, float] = {}
+    previous_task_best_error: float | None = None
     global_generation = 0
     adaptive_regen = config.resource_regen
     for step_index, contextual_task in enumerate(tasks):
@@ -684,6 +797,8 @@ def run_contextual_task_stream(
         lineage_efficiency = 0.0
         lineage_root = ""
         lineage_efficiency_count = 0
+        phenotype_diversity = 0.0
+        recovery_steps = 0
 
         for _local_step in range(config.max_steps_per_task):
             resource_pool = min(config.resource_capacity, resource_pool + adaptive_regen)
@@ -706,6 +821,11 @@ def run_contextual_task_stream(
             live = [cell for cell, _, _ in evaluations if cell.alive]
             live.sort(key=lambda cell: cell.energy, reverse=True)
             survivors = live
+            phenotype_diversity = _phenotype_diversity(
+                survivors,
+                chemistry_max_time=chemistry_max_time,
+                chemistry_dt=chemistry_dt,
+            )
             lineage_root, lineage_efficiency, lineage_efficiency_count = _lineage_efficiency_summary(survivors)
             representatives = _best_lineage_representatives(survivors)
             seen_tasks = tasks[: step_index + 1]
@@ -723,6 +843,10 @@ def run_contextual_task_stream(
             previous_best_transfer_score = previous_transfer_scores.get(lineage_root, 0.0) if lineage_root else 0.0
             forgetting_delta = previous_best_transfer_score - best_transfer_score
             motif_reappearance_count, motif_reappearance_by_root = _motif_reappearance_summary(survivors, seen_motif_patterns)
+            if previous_task_best_error is not None and not recovery_steps and evaluations:
+                step_best_error = min(error for _, _, error in evaluations)
+                if step_best_error <= previous_task_best_error:
+                    recovery_steps = _local_step + 1
 
             if survivors:
                 top_survivor = survivors[0]
@@ -750,6 +874,20 @@ def run_contextual_task_stream(
                 )
                 if representative is not None:
                     motif_summary = _motif_summary(representative.genome.local_motifs, seen_motif_patterns)
+                    neutral_drift_rate = 0.0
+                    if config.estimate_neutrality_trials > 0:
+                        neutral_drift_rate = estimate_neutrality(
+                            representative.genome,
+                            lambda candidate: evaluate_stream_cell(
+                                candidate,
+                                bundle,
+                                chemistry_max_time=chemistry_max_time,
+                                chemistry_dt=chemistry_dt,
+                                include_neutrality=False,
+                            ),
+                            rng,
+                            trials=config.estimate_neutrality_trials,
+                        )
                     per_task_errors: list[tuple[str, float]] = []
                     for seen_bundle in seen_bundles:
                         archive_eval = evaluate_stream_cell(
@@ -777,6 +915,7 @@ def run_contextual_task_stream(
                             motif_reappearance_count=motif_reappearance_count,
                             motif_reappearance_by_root=motif_reappearance_by_root,
                             resource_regen=adaptive_regen,
+                            neutral_drift_rate=neutral_drift_rate,
                             motif_count=motif_summary["motif_count"],
                             motif_reuse_total=motif_summary["motif_reuse_total"],
                             motif_transfer_count=motif_summary["motif_transfer_count"],
@@ -810,6 +949,8 @@ def run_contextual_task_stream(
                 motif_reappearance_count=motif_reappearance_count,
                 motif_reappearance_by_root=motif_reappearance_by_root,
                 resource_regen=adaptive_regen,
+                phenotype_diversity=phenotype_diversity,
+                recovery_steps=recovery_steps if previous_task_best_error is not None else 0,
                 **_motif_result_fields(
                     next(
                         (cell.genome.local_motifs for cell in colony.members if cell.alive and cell.genome.local_motifs),
@@ -819,6 +960,8 @@ def run_contextual_task_stream(
                 ),
             )
         )
+        if previous_task_best_error is not None and results[-1].recovery_steps == 0:
+            results[-1].recovery_steps = config.max_steps_per_task
 
         adaptive_regen = _adaptive_regen(
             config,
@@ -826,6 +969,7 @@ def run_contextual_task_stream(
             births=births,
             lineage_efficiency=lineage_efficiency,
         )
+        previous_task_best_error = results[-1].best_error
         for root, score in lineage_transfer_scores:
             previous_transfer_scores[root] = score
 

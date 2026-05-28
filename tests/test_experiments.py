@@ -40,4 +40,7 @@ def test_remaining_experiments_run() -> None:
             check=False,
         )
         assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr
-        assert "experiment:" in completed.stdout or "stream:" in completed.stdout
+        assert any(
+            prefix in completed.stdout
+            for prefix in ("experiment:", "stream:", "spatial_development:", "spatial3d_development:")
+        ), f"{script_name} produced no recognised output prefix:\n{completed.stdout}"
