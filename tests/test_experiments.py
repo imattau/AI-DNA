@@ -30,6 +30,15 @@ def test_remaining_experiments_run() -> None:
         "22_spatial_roaming.py",
         "23_spatial_adhesion.py",
         "24_spatial_routing.py",
+        "25_spatial_task_stream.py",
+        "26_spatial_ecology_stream.py",
+        "27_intercell_gene_expression.py",
+        "28_temporal_unfolding.py",
+        "29_reading_layer.py",
+        "30_writing_layer.py",
+        "31_epistasis.py",
+        "30_epistasis_colony.py",
+        "31_epistasis_colony2.py",
     ]
     for script_name in scripts:
         completed = subprocess.run(
@@ -42,5 +51,18 @@ def test_remaining_experiments_run() -> None:
         assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr
         assert any(
             prefix in completed.stdout
-            for prefix in ("experiment:", "stream:", "spatial_development:", "spatial3d_development:")
+            for prefix in (
+                "experiment:",
+                "stream:",
+                "cooperative_stream:",
+                "spatial_development:",
+                "spatial3d_development:",
+                "spatial_stream:",
+                "spatial_ecology_stream:",
+                "temporal_unfolding:",
+                "reading_layer:",
+                "epistasis_colony:",
+                "epistasis_colony2:",
+                "writing_layer:",
+            )
         ), f"{script_name} produced no recognised output prefix:\n{completed.stdout}"
