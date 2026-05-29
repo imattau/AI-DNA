@@ -197,6 +197,10 @@ def _run_warmup(system: CooperativeChemistrySystem) -> tuple[list[CellGenome], l
 
 
 # ── Three-cell gate phase ─────────────────────────────────────────────────────
+# Architecture: cell2 computes b*c/9 as intermediate; cell1 reads it and computes a*b*c/27.
+# cell3: echoes c/3 (pop_c fitness: echo_c_err)
+# cell2: reads c/3 from cell3 into s3, computes cell2_out × cell2_s3 = b*c/9 (pop_b fitness)
+# cell1: reads b*c/9 from cell2 into s3, computes cell1_out × cell1_s3 = a*b*c/27 (pop_a fitness)
 
 def _run_trio(
     genome_a: CellGenome,
@@ -206,11 +210,12 @@ def _run_trio(
 ) -> tuple[float, float, float, float, list[float]]:
     """Return (colony_err, score_a, score_b, score_c, probe) over all 27 cases."""
     colony_err = score_a = score_b = score_c = 0.0
-    probe = [0.0, 0.0, 0.0, 0.0]  # c1, c2, c3, best_out
+    probe = [0.0, 0.0, 0.0, 0.0]  # c1_out, c1_s3, c2_s3, colony_out
 
     for a, b, c in SPLIT_CASES_3:
         case = _make_case_3(a, b, c)
         target = (a * b * c) / 27.0
+        inter_target = (b * c) / 9.0  # cell2 must produce this
         cell1 = CellState(active_rules=list(genome_a.declare_rules()))
         cell1.signals = [a / 3.0, 0.0, 0.0, 0.0, 0.0]
         cell2 = CellState(active_rules=list(genome_b.declare_rules()))
@@ -223,18 +228,21 @@ def _run_trio(
         c1 = cell1.output if cell1.output is not None else cell1.signals[2]
         c2 = cell2.output if cell2.output is not None else cell2.signals[2]
         c3 = cell3.output if cell3.output is not None else cell3.signals[2]
+        c1_s3 = max(0.0, min(1.0, cell1.signals[3]))
+        c2_s3 = max(0.0, min(1.0, cell2.signals[3]))
 
-        e1 = (c1 - target) ** 2
-        e2 = (c2 - target) ** 2
-        e3 = (c3 - target) ** 2
-        colony_err += min(e1, e2, e3)
-        score_a += e1
-        score_b += e2
-        score_c += e3
+        colony_out = c1 * c1_s3
+        gate_a_err = (colony_out - target) ** 2
+        gate_b_err = (c2 * c2_s3 - inter_target) ** 2
+        echo_c_err = (c3 - c / 3.0) ** 2
+
+        colony_err += gate_a_err
+        score_a += gate_a_err
+        score_b += gate_b_err
+        score_c += echo_c_err
 
         if a == 2 and b == 2 and c == 2:
-            best_out = min([(e1, c1), (e2, c2), (e3, c3)])[1]
-            probe = [c1, c2, c3, best_out]
+            probe = [c1, c1_s3, c2_s3, colony_out]
 
     n = len(SPLIT_CASES_3)
     return colony_err / n, score_a / n, score_b / n, score_c / n, probe
@@ -291,7 +299,6 @@ def main() -> None:
 
         gen_best_colony = float("inf")
         probe_best = [0.0, 0.0, 0.0, 0.0]
-        best_cell_idx = 0
         for _, ga in scores_a[:3]:
             for _, gb in scores_b[:3]:
                 for _, gc in scores_c[:3]:
@@ -302,16 +309,12 @@ def main() -> None:
                         best_a_lineage = ga.lineage_id
                         best_b_lineage = gb.lineage_id
                         best_c_lineage = gc.lineage_id
-                        c1, c2, c3, _ = probe
-                        target_probe = (2 * 2 * 2) / 27.0
-                        errs = [(abs(c1 - target_probe), 0), (abs(c2 - target_probe), 1), (abs(c3 - target_probe), 2)]
-                        best_cell_idx = min(errs)[1]
 
-        c1, c2, c3, best_out = probe_best
+        c1_out, c1_s3, c2_s3, colony_out = probe_best
         print(
             f"epistasis_colony5: gen={generation} colony_err={gen_best_colony:.6f} "
-            f"best_cell={best_cell_idx} probe_out={best_out:.4f} probe_target=0.2963 "
-            f"cell1_out={c1:.4f} cell2_out={c2:.4f} cell3_out={c3:.4f} "
+            f"colony_out={colony_out:.4f} probe_target=0.2963 "
+            f"cell1_out={c1_out:.4f} cell1_s3={c1_s3:.4f} cell2_s3={c2_s3:.4f} "
             f"lineage_a={best_a_lineage} lineage_b={best_b_lineage} lineage_c={best_c_lineage}"
         )
 
