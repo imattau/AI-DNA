@@ -25,7 +25,7 @@ POPULATION_SIZE = 8
 SURVIVORS = 3
 PARTNER_SAMPLES = 3
 WARMUP_GENS = 200
-GATE_GENS = 100
+GATE_GENS = 400
 
 
 def _make_case(a: int, b: int) -> TaskCase:
