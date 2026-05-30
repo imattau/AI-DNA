@@ -22,9 +22,10 @@ The codebase is a testbed for:
 - tracking motif inheritance and lineage transfer
 - simulating energy-based survival and reproduction
 - experimenting with self-replication and cooperative chemistry
+- evolving gene blocks and inter-cell gene expression
 - searching for matrix-multiplication and other math programs without seeding a full solution
 
-The current emphasis is not on a single toy result. It is on building a reusable platform for long-running adaptive search.
+The current goal is open-ended complexity growth: evolved circuits accumulate across experiments as reusable motifs rather than being discarded. Each experiment can seed its population from proven building blocks discovered by earlier runs.
 
 ## Quick Start
 
@@ -80,6 +81,7 @@ The current architecture has these layers:
    - a cell has a genome, active rules, signals, output, and trace
    - cells can persist across episodes
    - cells can cooperate through shared chemistry contexts
+   - cells can express named gene blocks and respond to regulatory codons
 
 5. **Colony and evolution**
    - cells reproduce under maintenance cost and resource pressure
@@ -125,6 +127,12 @@ Key files:
   - shared-context multi-cell signaling arena
 - `tracing.py`
   - trace formatting and experiment report helpers
+- `reading.py`
+  - machine-native observation protocol for individual cells and colonies
+- `writing.py`
+  - motif query and genome composition helpers
+- `motif_store.py`
+  - SQLite persistence for evolved motifs; save and query by role and task
 - `experiments/`
   - runnable experiment entrypoints
 - `tests/`
@@ -202,6 +210,32 @@ python3 experiments/10_evolve_self_replication.py
 
 ```bash
 python3 experiments/13_cooperative_chemistry.py
+python3 experiments/27_intercell_gene_expression.py
+```
+
+### Temporal unfolding and reading
+
+```bash
+python3 experiments/28_temporal_unfolding.py
+python3 experiments/29_reading_layer.py
+```
+
+### Writing layer
+
+```bash
+python3 experiments/30_writing_layer.py
+```
+
+### Epistasis colony
+
+```bash
+python3 experiments/30_epistasis_colony.py
+```
+
+### Epistasis
+
+```bash
+python3 experiments/31_epistasis.py
 ```
 
 ### Matrix synthesis benchmark
@@ -223,6 +257,7 @@ python3 experiments/21_spatial_matrix_fabric_solve.py
 python3 experiments/22_spatial_roaming.py
 python3 experiments/23_spatial_adhesion.py
 python3 experiments/24_spatial_routing.py
+python3 experiments/28_temporal_unfolding.py
 ```
 
 ## Testing
@@ -254,6 +289,11 @@ python3 -m pytest -q tests/test_spatial_matrix_fabric_solve.py
 python3 -m pytest -q tests/test_spatial_matrix_fabric_stream.py
 python3 -m pytest -q tests/test_spatial_routing.py
 python3 -m pytest -q tests/test_spatial_self_repair.py
+python3 -m pytest -q tests/test_temporal_unfolding.py
+python3 -m pytest -q tests/test_reading_layer.py
+python3 -m pytest -q tests/test_writing.py
+python3 -m pytest -q tests/test_epistasis_colony.py
+python3 -m pytest -q tests/test_epistasis.py
 ```
 
 ## Import Surface
@@ -265,6 +305,7 @@ The `dna_chem_vm` package provides a compatibility layer that re-exports the mai
 - colony and evolution helpers
 - genome and motif types
 - replication helpers
+- reading helpers
 - task definitions
 
 That means the package can be used as a small library as well as a script-driven research project.
@@ -279,6 +320,12 @@ That means the package can be used as a small library as well as a script-driven
 - run a VM-level replication demo
 - evolve a self-replication candidate
 - run a cooperative signaling arena
+- expose a fixed-size reading protocol for external agents and peer cells
+- compose genomes from queried motifs
+- modulate signal outputs epistatically with `SCALE_BY_Sn`
+- evolve cooperative two-cell colonies that specialize under split-input pressure
+- discover SENSE_PEER circuits that gate colony output by a peer signal (exp33)
+- persist evolved circuits as reusable motifs in a SQLite database across experiments
 - search matrix programs under a symbolic verifier
 - run a broader math ecology with changing contexts
 
@@ -300,6 +347,12 @@ This section records the current measured outcomes from the regression suite and
 | --- | --- | --- |
 | `tests/test_codons.py` + `tests/test_tasks.py` + `tests/test_motifs.py` + `tests/test_chemistry_and_colony.py` | `12 passed in 7.94s` | The codon substrate, task bundles, motif bookkeeping, and chemistry/colony plumbing are internally consistent. |
 | `tests/test_task_stream.py` + `tests/test_contextual_task_stream.py` + `tests/test_math_ecology.py` + `tests/test_replication.py` + `tests/test_cooperative_chemistry.py` | `7 passed in 65.69s` | The system can survive changing tasks, contextual noise, replication, and shared chemistries in the same overall architecture. |
+| `tests/test_intercell_gene_expression.py` + `tests/test_chemistry_and_colony.py` | `12 passed in 2.49s` | Cooperative chemistry, inter-cell scoring, and the new gene-expression layer work without breaking the older colony and chemistry behaviors. |
+| `tests/test_temporal_unfolding.py` + `tests/test_codons.py` + `tests/test_regulatory_codons.py` + `tests/test_chemistry_and_colony.py` | `25 passed in 1.72s` | Temporal stage accumulation, new regulatory codons, and stage-gated expression all work without disturbing the baseline chemistry path. |
+| `tests/test_reading_layer.py` + `tests/test_temporal_unfolding.py` + `tests/test_codons.py` + `tests/test_regulatory_codons.py` + `tests/test_chemistry_and_colony.py` + `tests/test_cooperative_chemistry.py` | `32 passed in 1.66s` | The 6-float reading protocol, extended vector mode, and peer sensing all work while preserving the older temporal and cooperative behaviors. |
+| `tests/test_writing.py` + `tests/test_reading_layer.py` + `tests/test_temporal_unfolding.py` + `tests/test_codons.py` + `tests/test_regulatory_codons.py` + `tests/test_chemistry_and_colony.py` + `tests/test_cooperative_chemistry.py` | `36 passed in 2.10s` | The motif query layer and genome writer compose successfully from captured motifs, and the read/write protocol remains stable. |
+| `tests/test_epistasis_colony.py` + `tests/test_epistasis.py` + `tests/test_reading_layer.py` + `tests/test_codons.py` + `tests/test_regulatory_codons.py` + `tests/test_chemistry_and_colony.py` | `39 passed in 1.89s` | The split-input colony, channel-specific peer sensing, and `SCALE_BY_Sn` runtime modulation work together without disturbing the baseline chemistry behavior. |
+| `tests/test_epistasis.py` + `tests/test_codons.py` + `tests/test_regulatory_codons.py` + `tests/test_chemistry_and_colony.py` | `32 passed in 1.58s` | `SCALE_BY_Sn` codons, `ScaleRule`, and delta-scaled runtime modulation work without disturbing the baseline chemistry behavior. |
 | `tests/test_matrix_experiment.py -k 'not script'` | `3 passed, 1 deselected in 0.40s` | The matrix synthesis core and symbolic verifier are functioning without relying on the slower smoke-style script path. |
 | `tests/test_spatial.py` + `tests/test_spatial3d.py` + `tests/test_spatial_routing.py` | `15 passed in 1.06s` | The spatial substrate now supports development, roaming, adhesion, and signal routing in both 2D and 3D. |
 | `tests/test_spatial_body_plan.py` | `3 passed in 0.87s` | The 3D body-plan benchmark is exact and reproducible. |
@@ -316,6 +369,13 @@ This section records the current measured outcomes from the regression suite and
 | `experiments/09_matrix_multiplication_search.py` | exploratory matrix search remains partial but runs without a seeded full solution | The platform is genuinely searching algorithm space rather than replaying an answer. |
 | `experiments/10_evolve_self_replication.py` | exact replication is reached by evolution | Self-replication can emerge through search. |
 | `experiments/13_cooperative_chemistry.py` | one cell sends and another receives in a shared context | Cells can coordinate through a common chemical environment. |
+| `experiments/27_intercell_gene_expression.py` | cooperative evolution runs with emergent gene usage; best pair error remains partial | The gene-block and regulatory-codon stack now composes with cooperative chemistry end to end, but it has not yet solved multiply. |
+| `experiments/28_temporal_unfolding.py` | stage signal reaches `0.800`; early/late gate notes alternate and the late-stage role is expressed | The chemistry layer can now represent developmental time explicitly and switch behavior after a threshold without breaking earlier behavior. |
+| `experiments/29_reading_layer.py` | fixed-size base and extended vectors are emitted; peer sensing populates the receiver from a neighboring cell | The model now has a machine-native observation protocol, which is a useful bridge to external agents and to inter-cell reading. |
+| `experiments/30_writing_layer.py` | motifs are queried and composed into a genome that evaluates cleanly on the multiply task | External motif-guided construction can now produce valid genomes without mutating the whole search space. |
+| `experiments/30_epistasis_colony.py` | the colony reaches a low split-input error on the probe case, with the cells taking different roles under a peer-gated epistatic grammar | The model can express cooperative, context-sensitive colony behavior where peer sensing and analog modulation shape division of labor. |
+| `experiments/33_epistasis_colony4.py` | at generation 128, cell1_s3 jumps from 0.6667 to 1.0 and colony_out hits the target 0.6667 for the probe case (a=2, b=3); the circuit is stable for the remaining 272 generations | A SENSE_PEER gate circuit was discovered spontaneously: cell1 reads cell2's b/3 signal into s3 and uses SCALE_BY_S3 to produce (a/3)×(b/3). The best-performing genomes are captured as role-tagged motifs and written to data/motifs.db for reuse in future experiments. |
+| `experiments/31_epistasis.py` | `SCALE_BY_Sn` halves the emitted `signal[0]` in the demo, and the generated genome evaluates cleanly on multiply | The system now has analog gene-gene modulation, which is a higher-order regulatory layer above binary gating. |
 | `experiments/17_spatial_body_plan_search.py` | exact body plan match | A single genome can grow a precise 3D spatial arrangement. |
 | `experiments/20_spatial_self_repair.py` | a removed neighbor is regenerated | The spatial substrate has internal repair, not just passive robustness. |
 | `experiments/23_spatial_adhesion.py` | signal-gated clustering occurs | Cells can join locally when the cue is present, without genome fusion. |
@@ -348,6 +408,7 @@ The repository also includes focused tests for the main subsystems:
 - `tests/test_matrix_experiment.py`
 - `tests/test_replication.py`
 - `tests/test_cooperative_chemistry.py`
+- `tests/test_intercell_gene_expression.py`
 - `tests/test_spatial.py`
 - `tests/test_spatial3d.py`
 - `tests/test_spatial_body_plan.py`
@@ -356,6 +417,10 @@ The repository also includes focused tests for the main subsystems:
 - `tests/test_spatial_matrix_fabric_stream.py`
 - `tests/test_spatial_routing.py`
 - `tests/test_spatial_self_repair.py`
+- `tests/test_temporal_unfolding.py`
+- `tests/test_reading_layer.py`
+- `tests/test_writing.py`
+- `tests/test_motif_store.py`
 
 ## Design Principles
 
