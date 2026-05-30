@@ -90,7 +90,7 @@ class CodonOracle:
             "model": "tinyllama",
             "prompt": prompt,
             "stream": False,
-            "options": {"temperature": 0.7, "num_predict": 64},
+            "options": {"temperature": 0.7, "num_predict": 128},
         }).encode()
         req = urllib.request.Request(
             f"{self._url}/api/generate",
