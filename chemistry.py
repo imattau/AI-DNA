@@ -58,6 +58,36 @@ def _record(
     )
 
 
+def _sense_peer_cross_impl(
+    state: "CellState", context: "ChemistryContext", src_index: int, dst_index: int
+) -> str | None:
+    if dst_index >= len(state.signals):
+        return None
+    best_value: float | None = None
+    for cell_idx, peer_vector in context.peer_vectors.items():
+        if cell_idx == context.self_cell_index:
+            continue
+        if src_index < len(peer_vector):
+            v = float(peer_vector[src_index])
+            if best_value is None or abs(v) > abs(best_value):
+                best_value = v
+    if best_value is None:
+        return None
+    changed = state.signals[dst_index] != best_value
+    if changed:
+        state.signals[dst_index] = best_value
+    return f"sense_peer_{src_index}_to_{dst_index}" if changed else None
+
+
+def _copy_slot_impl(state: "CellState", src: int, dst: int) -> str | None:
+    if src >= len(state.signals) or dst >= len(state.signals):
+        return None
+    if state.signals[dst] == state.signals[src]:
+        return None
+    state.signals[dst] = state.signals[src]
+    return f"copy_{src}_to_{dst}"
+
+
 def build_rulebook() -> dict[str, Rule]:
     def emit_x(state: CellState, task: TaskCase, context: ChemistryContext) -> str | None:
         if state.signals[0] != task.x:
@@ -224,8 +254,8 @@ def build_rulebook() -> dict[str, Rule]:
         "SENSE_PEER_0": Rule("SENSE_PEER_0", lambda state, task, context: _sense_peer(state, context, 0)),
         "SENSE_PEER_1": Rule("SENSE_PEER_1", lambda state, task, context: _sense_peer(state, context, 1)),
         "SENSE_PEER_2": Rule("SENSE_PEER_2", lambda state, task, context: _sense_peer(state, context, 2)),
-        "SENSE_PEER_2_TO_3": Rule("SENSE_PEER_2_TO_3", lambda state, task, context: _sense_peer_cross(state, context, 2, 3)),
-        "SENSE_PEER_1_TO_3": Rule("SENSE_PEER_1_TO_3", lambda state, task, context: _sense_peer_cross(state, context, 1, 3)),
+        "SENSE_PEER_2_TO_3": Rule("SENSE_PEER_2_TO_3", lambda state, task, context: _sense_peer_cross_impl(state, context, 2, 3)),
+        "SENSE_PEER_1_TO_3": Rule("SENSE_PEER_1_TO_3", lambda state, task, context: _sense_peer_cross_impl(state, context, 1, 3)),
     }
 
 
