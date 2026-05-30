@@ -131,6 +131,7 @@ class CodonOracle:
             "model": "tinyllama",
             "prompt": prompt,
             "stream": False,
+            "format": "json",
             "options": {"temperature": 0.7, "num_predict": 128},
         }).encode()
         req = urllib.request.Request(
