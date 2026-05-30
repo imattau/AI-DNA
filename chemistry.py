@@ -5,6 +5,7 @@ from math import inf
 from typing import Callable, Iterable
 
 from cell import CellState
+from genome import GateRule, ScaleRule
 from tasks import TaskCase
 from tracing import TraceEvent
 
@@ -14,6 +15,8 @@ class ChemistryContext:
     inbox: list[float] = field(default_factory=list)
     outbox: list[float] = field(default_factory=list)
     time: float = 0.0
+    stage_increment: float = 0.0
+    peer_vectors: dict[int, tuple[float, ...]] = field(default_factory=dict)
     events: list[dict[str, float | str]] = field(default_factory=list)
 
     def schedule(self, kind: str, *, when: float, payload: float | str | None = None) -> None:
@@ -32,11 +35,15 @@ class Rule:
     apply: RuleFn
 
 
+def _clamp(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
 def _record(
     state: CellState,
     event_index: int,
     rule_name: str,
-    before: tuple[float, float, float, float],
+    before: tuple[float, float, float, float, float],
     note: str = "",
 ) -> None:
     state.trace.append(
@@ -151,6 +158,18 @@ def build_rulebook() -> dict[str, Rule]:
             return "recv"
         return None
 
+    def _sense_peer(state: CellState, context: ChemistryContext, peer_index: int) -> str | None:
+        peer_vector = context.peer_vectors.get(peer_index)
+        if not peer_vector:
+            return None
+        if peer_index >= len(peer_vector) or peer_index >= len(state.signals):
+            return None
+        value = float(peer_vector[peer_index])
+        changed = state.signals[peer_index] != value
+        if changed:
+            state.signals[peer_index] = value
+        return f"sense_peer_{peer_index}" if changed else None
+
     return {
         "RULE_EMIT_X": Rule("RULE_EMIT_X", emit_x),
         "RULE_EMIT_Y": Rule("RULE_EMIT_Y", emit_y),
@@ -167,7 +186,37 @@ def build_rulebook() -> dict[str, Rule]:
         "RULE_THRESH3": Rule("RULE_THRESH3", thresh3),
         "SEND": Rule("SEND", send),
         "RECV": Rule("RECV", recv),
+        "SENSE_PEER_0": Rule("SENSE_PEER_0", lambda state, task, context: _sense_peer(state, context, 0)),
+        "SENSE_PEER_1": Rule("SENSE_PEER_1", lambda state, task, context: _sense_peer(state, context, 1)),
+        "SENSE_PEER_2": Rule("SENSE_PEER_2", lambda state, task, context: _sense_peer(state, context, 2)),
     }
+
+
+def _condition_passes(condition: str, cell: CellState) -> bool:
+    def signal(index: int) -> float:
+        return cell.signals[index] if index < len(cell.signals) else 0.0
+
+    if condition == "IF_S0_GT":
+        return signal(0) > 0.5
+    if condition == "IF_S1_GT":
+        return signal(1) > 0.5
+    if condition == "IF_S2_GT":
+        return signal(2) > 0.5
+    if condition == "IF_S2_LT":
+        return signal(2) < 0.5
+    if condition == "IF_S3_GT":
+        return signal(3) > 0.5
+    if condition == "IF_S3_LT":
+        return signal(3) < 0.5
+    if condition == "IF_S4_GT":
+        return signal(4) > 0.5
+    if condition == "IF_S4_LT":
+        return signal(4) < 0.5
+    if condition == "IF_S0_LT":
+        return signal(0) < 0.5
+    if condition == "IF_S1_LT":
+        return signal(1) < 0.5
+    return True
 
 
 @dataclass(slots=True)
@@ -187,15 +236,60 @@ class ChemistrySystem:
     ) -> tuple[bool, int]:
         changed = False
         event_index = event_index_start
-        for rule_name in cell.active_rules:
-            rule = self.rulebook[rule_name]
+
+        def execute(rule_entry: str | GateRule | ScaleRule) -> bool:
+            nonlocal changed, event_index
+            if isinstance(rule_entry, ScaleRule):
+                modulator = cell.signals[rule_entry.signal_slot] if rule_entry.signal_slot < len(cell.signals) else 0.0
+                before = tuple(cell.signals)
+                inner_changed = execute(rule_entry.inner)
+                after_inner = tuple(cell.signals)
+                if inner_changed or after_inner != before:
+                    for index, pre_value in enumerate(before):
+                        if index == rule_entry.signal_slot:
+                            continue
+                        delta = cell.signals[index] - pre_value
+                        if delta != 0.0:
+                            cell.signals[index] = _clamp(pre_value + delta * modulator)
+                    after = tuple(cell.signals)
+                    if after != before:
+                        changed = True
+                        _record(
+                            cell,
+                            event_index,
+                            f"SCALE_BY_S{rule_entry.signal_slot}",
+                            before,
+                            f"scale={modulator:.3f}",
+                        )
+                        event_index += 1
+                return changed
+            if isinstance(rule_entry, GateRule):
+                before = tuple(cell.signals)
+                gate_name = f"GATE[{rule_entry.condition}]"
+                if _condition_passes(rule_entry.condition, cell):
+                    _record(cell, event_index, gate_name, before, "open")
+                    event_index += 1
+                    for nested in rule_entry.rules:
+                        execute(nested)
+                else:
+                    _record(cell, event_index, gate_name, before, "closed")
+                    event_index += 1
+                return changed
+
+            rule = self.rulebook.get(rule_entry)
+            if rule is None:
+                return changed
             before = tuple(cell.signals)
             note = rule.apply(cell, task, context)
             after = tuple(cell.signals)
             if after != before or note:
                 changed = True
-                _record(cell, event_index, rule_name, before, note or "")
+                _record(cell, event_index, rule_entry, before, note or "")
                 event_index += 1
+            return changed
+
+        for rule_name in cell.active_rules:
+            execute(rule_name)
         return changed, event_index
 
     def run(self, cell: CellState, task: TaskCase, *, context: ChemistryContext | None = None) -> CellState:
@@ -203,8 +297,12 @@ class ChemistrySystem:
         quiet_ticks = 0
         event_index = 0
         while context.time <= self.max_time:
+            if context.stage_increment > 0.0 and len(cell.signals) > 4:
+                cell.signals[4] = min(cell.signals[4] + context.stage_increment, 1.0)
             changed, event_index = self.step(cell, task, context, event_index_start=event_index)
-            if cell.output is not None and not changed:
+            if context.stage_increment > 0.0:
+                quiet_ticks = 0
+            elif cell.output is not None and not changed:
                 quiet_ticks += 1
             else:
                 quiet_ticks = 0
