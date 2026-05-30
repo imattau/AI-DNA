@@ -45,6 +45,7 @@ def test_remaining_experiments_run() -> None:
         "35_epistasis_colony6.py",
         "36_epistasis_bc_gate.py",
         "37_llm_codon_oracle.py",
+        "38_stage_oracle.py",
     ]
     for script_name in scripts:
         completed = subprocess.run(
@@ -76,5 +77,6 @@ def test_remaining_experiments_run() -> None:
                 "epistasis_bc_gate:",
                 "writing_layer:",
                 "llm_oracle:",
+                "stage_oracle:",
             )
         ), f"{script_name} produced no recognised output prefix:\n{completed.stdout}"

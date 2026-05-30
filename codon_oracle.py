@@ -85,6 +85,47 @@ class CodonOracle:
             f'{{"template": "SENSE_PEER_S_TO_D", "s": 3, "d": 4}}'
         )
 
+    def detect_stage(self, echo_err: float, gate_err: float, cell2_s3_mean: float) -> str:
+        if echo_err > 0.05:
+            return "echo"
+        if cell2_s3_mean < 0.1:
+            return "sense"
+        return "scale"
+
+    def build_stage_prompt(
+        self,
+        stage: str,
+        codon_names: list[str],
+        fitness_history: list[float],
+        best_motif: list[str],
+    ) -> str:
+        history_str = ", ".join(f"{v:.4f}" for v in fitness_history[-10:])
+        motif_str = " → ".join(best_motif) if best_motif else "none"
+        names_str = ", ".join(codon_names[:20])
+
+        if stage == "echo":
+            menu = "COPY_S_TO_D (params: s, d in 0-4, s≠d)"
+            framing = "cell2 cannot yet output proportional values — scaffold signal routing within the cell"
+            example = '{"template": "COPY_S_TO_D", "s": 1, "d": 2}'
+        elif stage == "sense":
+            menu = "SENSE_PEER_S_TO_D (params: s, d in 0-4, s≠d)"
+            framing = "cell2 outputs correctly but cannot read from its peer — scaffold cross-cell sensing"
+            example = '{"template": "SENSE_PEER_S_TO_D", "s": 2, "d": 3}'
+        else:  # scale
+            menu = "SCALE_BY_SN (param: n in 0-4), IF_SN_GT (param: n in 0-4), IF_SN_LT (param: n in 0-4)"
+            framing = "cell2 reads peer but gate product needs refinement — scaffold conditional scaling"
+            example = '{"template": "SCALE_BY_SN", "n": 3}'
+
+        return (
+            f"You are a genome expander for an evolutionary system. "
+            f"Current codons: {names_str}. "
+            f"Recent fitness (lower=better): [{history_str}]. "
+            f"Best circuit: {motif_str}. "
+            f"Stage: {stage} — {framing}. "
+            f"Propose ONE new codon using exactly this template: {menu}. "
+            f"Reply with ONLY a JSON object, e.g.: {example}"
+        )
+
     def query(self, prompt: str, timeout: float = 10.0) -> dict[str, Any] | None:
         payload = json.dumps({
             "model": "tinyllama",
@@ -177,13 +218,20 @@ class CodonOracle:
         rulebook: dict[str, Rule],
         codon_map: dict[int, str],
         op_names: list[str],
+        echo_err: float = 0.5,
+        gate_err: float = 0.5,
+        cell2_s3_mean: float = 0.0,
     ) -> None:
         if not self.is_stagnating(gate_err_history):
             return
-        prompt = self.build_prompt(codon_names, gate_err_history, best_motif)
+        stage = self.detect_stage(echo_err, gate_err, cell2_s3_mean)
+        prompt = self.build_stage_prompt(stage, codon_names, gate_err_history, best_motif)
         proposal = self.query(prompt)
         if proposal is None:
-            print(f"llm_oracle: gen={generation} ollama_unreachable_or_bad_json")
+            print(f"llm_oracle: gen={generation} stage={stage} ollama_unreachable_or_bad_json")
             return
         name = self.inject(proposal, rulebook, codon_map, op_names)
-        print(f"llm_oracle: gen={generation} proposed={proposal} injected={'True' if name else 'False'} codon={name}")
+        print(
+            f"llm_oracle: gen={generation} stage={stage} proposed={proposal} "
+            f"injected={'True' if name else 'False'} codon={name}"
+        )

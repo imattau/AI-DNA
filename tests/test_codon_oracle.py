@@ -91,3 +91,39 @@ def test_build_prompt_contains_required_fields():
     assert "0.25" in prompt or "0.24" in prompt
     assert "RULE_COPY1_2" in prompt
     assert "SENSE_PEER_S_TO_D" in prompt  # template menu present
+
+
+def test_detect_stage_echo():
+    oracle = CodonOracle()
+    assert oracle.detect_stage(echo_err=0.10, gate_err=0.27, cell2_s3_mean=0.0) == "echo"
+
+
+def test_detect_stage_sense():
+    oracle = CodonOracle()
+    assert oracle.detect_stage(echo_err=0.02, gate_err=0.27, cell2_s3_mean=0.05) == "sense"
+
+
+def test_detect_stage_scale():
+    oracle = CodonOracle()
+    assert oracle.detect_stage(echo_err=0.02, gate_err=0.10, cell2_s3_mean=0.50) == "scale"
+
+
+def test_build_stage_prompt_echo_contains_copy():
+    oracle = CodonOracle()
+    prompt = oracle.build_stage_prompt("echo", ["COPY_1_TO_2"], [0.27, 0.27], ["RULE_COPY1_2"])
+    assert "COPY_S_TO_D" in prompt
+    assert "SENSE_PEER_S_TO_D" not in prompt
+
+
+def test_build_stage_prompt_sense_contains_sense_peer():
+    oracle = CodonOracle()
+    prompt = oracle.build_stage_prompt("sense", ["SENSE_PEER_0"], [0.27, 0.27], ["RULE_COPY1_2"])
+    assert "SENSE_PEER_S_TO_D" in prompt
+    assert "COPY_S_TO_D" not in prompt
+
+
+def test_build_stage_prompt_scale_contains_scale_by():
+    oracle = CodonOracle()
+    prompt = oracle.build_stage_prompt("scale", ["SENSE_PEER_0"], [0.10, 0.10], ["RULE_COPY1_2"])
+    assert "SCALE_BY_SN" in prompt
+    assert "COPY_S_TO_D" not in prompt
