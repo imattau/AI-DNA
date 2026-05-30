@@ -25,7 +25,7 @@ CHEMISTRY_ROUNDS = 6
 POPULATION_SIZE = 4
 SURVIVORS = 2
 PARTNER_SAMPLES = 1
-GATE_GENS = 3  # short for smoke-test; full research run would use 600+
+GATE_GENS = 600
 
 
 def _make_case(b: int, c: int) -> TaskCase:
