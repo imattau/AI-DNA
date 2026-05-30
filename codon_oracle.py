@@ -160,6 +160,8 @@ class CodonOracle:
         op_names: list[str],
     ) -> str | None:
         template = proposal.get("template", "")
+        if not isinstance(template, str):
+            return None
         if template not in _TEMPLATES:
             return None
 
