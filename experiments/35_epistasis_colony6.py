@@ -217,25 +217,27 @@ def main() -> None:
     # Load stored motifs
     try:
         store = MotifStore()
-        gate_motifs = store.query(role="gate", task="multiply_2cell", top_k=3)
-        echo_motifs = store.query(role="echo", task="multiply_2cell", top_k=3)
+        gate_ab_motifs = store.query(role="gate", task="multiply_2cell", top_k=3)
+        gate_bc_motifs = store.query(role="gate_bc", task="multiply_3cell_bc", top_k=3)
+        echo_c_motifs = store.query(role="echo_c", task="multiply_3cell_bc", top_k=3)
         store.close()
         print(
-            f"epistasis_colony6: loaded {len(gate_motifs)} gate motifs, "
-            f"{len(echo_motifs)} echo motifs from store"
+            f"epistasis_colony6: loaded {len(gate_ab_motifs)} gate_ab, "
+            f"{len(gate_bc_motifs)} gate_bc, {len(echo_c_motifs)} echo_c motifs from store"
         )
     except Exception:
-        gate_motifs = []
-        echo_motifs = []
+        gate_ab_motifs = []
+        gate_bc_motifs = []
+        echo_c_motifs = []
         print("epistasis_colony6: no motif store found, starting fully random")
 
-    pop_a = _seed_population(gate_motifs, 3, POPULATION_SIZE, rng, "A")
-    pop_b = _seed_population(gate_motifs, 3, POPULATION_SIZE, rng, "B")
-    pop_c = _seed_population(echo_motifs, 3, POPULATION_SIZE, rng, "C")
+    pop_a = _seed_population(gate_ab_motifs, 3, POPULATION_SIZE, rng, "A")
+    pop_b = _seed_population(gate_bc_motifs, 3, POPULATION_SIZE, rng, "B")
+    pop_c = _seed_population(echo_c_motifs, 3, POPULATION_SIZE, rng, "C")
 
-    n_a = min(3, len(gate_motifs))
-    n_b = min(3, len(gate_motifs))
-    n_c = min(3, len(echo_motifs))
+    n_a = min(3, len(gate_ab_motifs))
+    n_b = min(3, len(gate_bc_motifs))
+    n_c = min(3, len(echo_c_motifs))
     print(f"epistasis_colony6: seeded pop_a={n_a} pop_b={n_b} pop_c={n_c} from motifs")
 
     best_a_lineage = pop_a[0].lineage_id
