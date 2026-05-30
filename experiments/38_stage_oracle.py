@@ -62,8 +62,13 @@ def _run_pair(
     return sum(gate_errs) / n, sum(echo_errs) / n, sum(s3s) / n, probe
 
 
-def _score_b(genome: CellGenome, partners: list[CellGenome], system: CooperativeChemistrySystem, rng: Random) -> float:
-    return sum(_run_pair(genome, rng.choice(partners), system)[0] for _ in range(PARTNER_SAMPLES)) / PARTNER_SAMPLES
+def _score_b(genome: CellGenome, partners: list[CellGenome], system: CooperativeChemistrySystem, rng: Random, stage: str = "gate") -> float:
+    errors = []
+    for _ in range(PARTNER_SAMPLES):
+        partner = rng.choice(partners)
+        ge, ee, s3m, _ = _run_pair(genome, partner, system)
+        errors.append(ee if stage == "echo" else ge)
+    return sum(errors) / len(errors)
 
 
 def _score_c(genome: CellGenome, partners: list[CellGenome], system: CooperativeChemistrySystem, rng: Random) -> float:
@@ -101,9 +106,13 @@ def main() -> None:
     store = MotifStore()
     motif_captured = False
     gate_err_history: list[float] = []
+    gen_best_echo = 0.5
+    gen_best_gate = 0.5
+    gen_best_s3 = 0.0
 
     for generation in range(GATE_GENS):
-        scores_b = sorted([(_score_b(g, pop_c, system, rng), g) for g in pop_b], key=lambda x: x[0])
+        current_stage = oracle.detect_stage(gen_best_echo, gen_best_gate, gen_best_s3) if generation > 0 else "echo"
+        scores_b = sorted([(_score_b(g, pop_c, system, rng, current_stage), g) for g in pop_b], key=lambda x: x[0])
         scores_c = sorted([(_score_c(g, pop_b, system, rng), g) for g in pop_c], key=lambda x: x[0])
 
         gen_best_gate = float("inf")

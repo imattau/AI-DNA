@@ -162,6 +162,12 @@ class CodonOracle:
         if template not in _TEMPLATES:
             return None
 
+        # flatten {"parameters": {"s": 1, "d": 2}} → {"s": 1, "d": 2, "template": ...}
+        if "parameters" in proposal and isinstance(proposal["parameters"], dict):
+            flat = dict(proposal)
+            flat.update(proposal["parameters"])
+            proposal = flat
+
         try:
             if template == "SENSE_PEER_S_TO_D":
                 s, d = int(proposal["s"]), int(proposal["d"])
