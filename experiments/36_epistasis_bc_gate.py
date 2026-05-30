@@ -31,7 +31,7 @@ POPULATION_SIZE = 8
 SURVIVORS = 3
 PARTNER_SAMPLES = 3
 WARMUP_GENS = 200
-GATE_GENS = 400
+GATE_GENS = 800
 
 
 def _make_case(b: int, c: int) -> TaskCase:
@@ -107,20 +107,47 @@ def _random_genome(rng: Random, lineage_id: str) -> CellGenome:
     )
 
 
-# ── Curriculum warm-up (mirrors exp32 pattern for b/c roles) ─────────────────
-
-def _warmup_alpha(generation: int) -> tuple[float, str, str]:
-    if generation < 100:
-        return generation / 99.0, "s1", "s2"
-    return (generation - 100) / 99.0, "s2", "s3"
+# ── Curriculum warm-up: 3-phase scaffold ─────────────────────────────────────
+# Phase 1 (gens 0-99):   solo echo — cell2 echoes b/3, cell3 echoes c/3, NO partner runs
+# Phase 2 (gens 100-149): paired echo — both cells run together, scored on own-echo
+# Phase 3 (gens 150-199): blended gate — blend echo_own → gate product
 
 
-def _warmup_run_pair(
+def _solo_echo_score_b(genome: CellGenome, system: CooperativeChemistrySystem) -> float:
+    """Score cell2 on echoing b/3 from signals[1], run solo (no partner)."""
+    err = 0.0
+    for b, c in SPLIT_CASES:
+        case = _make_case(b, c)
+        cell2 = CellState(active_rules=list(genome.declare_rules()))
+        cell2.signals = [0.0, b / 3.0, 0.0, 0.0, 0.0]
+        context = ChemistryContext()
+        system.run([cell2], case, context=context, max_time=float(CHEMISTRY_ROUNDS))
+        c2 = cell2.output if cell2.output is not None else cell2.signals[2]
+        err += (c2 - b / 3.0) ** 2
+    return err / len(SPLIT_CASES)
+
+
+def _solo_echo_score_c(genome: CellGenome, system: CooperativeChemistrySystem) -> float:
+    """Score cell3 on echoing c/3 from signals[2], run solo (no partner)."""
+    err = 0.0
+    for b, c in SPLIT_CASES:
+        case = _make_case(b, c)
+        cell3 = CellState(active_rules=list(genome.declare_rules()))
+        cell3.signals = [0.0, 0.0, c / 3.0, 0.0, 0.0]
+        context = ChemistryContext()
+        system.run([cell3], case, context=context, max_time=float(CHEMISTRY_ROUNDS))
+        c3 = cell3.output if cell3.output is not None else cell3.signals[2]
+        err += (c3 - c / 3.0) ** 2
+    return err / len(SPLIT_CASES)
+
+
+def _paired_run(
     genome_b: CellGenome,
     genome_c: CellGenome,
     system: CooperativeChemistrySystem,
 ) -> dict[str, float]:
-    s1_b = s1_c = s2_b = s2_c = s3_err = 0.0
+    """Run cell2+cell3 paired; return echo_own and gate_product metrics."""
+    echo_b = echo_c = gate_err = 0.0
     for b, c in SPLIT_CASES:
         case = _make_case(b, c)
         cell2 = CellState(active_rules=list(genome_b.declare_rules()))
@@ -131,48 +158,86 @@ def _warmup_run_pair(
         system.run([cell2, cell3], case, context=context, max_time=float(CHEMISTRY_ROUNDS))
         c2 = cell2.output if cell2.output is not None else cell2.signals[2]
         c3 = cell3.output if cell3.output is not None else cell3.signals[2]
-        s1_b += (c2 - b / 3.0) ** 2   # echo own
-        s1_c += (c3 - c / 3.0) ** 2   # echo own
-        s2_b += (c2 - c / 3.0) ** 2   # echo peer
-        s2_c += (c3 - b / 3.0) ** 2   # echo peer
-        s3_err += ((c2 + c3) / 2.0 - (b * c) / 9.0) ** 2
+        s3 = max(0.0, min(1.0, cell2.signals[3]))
+        echo_b += (c2 - b / 3.0) ** 2
+        echo_c += (c3 - c / 3.0) ** 2
+        gate_err += (c2 * s3 - (b * c) / 9.0) ** 2
     n = len(SPLIT_CASES)
-    return {"s1_b": s1_b/n, "s1_c": s1_c/n, "s2_b": s2_b/n, "s2_c": s2_c/n, "s3": s3_err/n}
-
-
-def _warmup_blended(metrics: dict[str, float], role: str, alpha: float, sf: str, st: str) -> float:
-    def e(s: str) -> float:
-        return metrics.get(f"{s}_{role}" if s != "s3" else "s3", 0.0)
-    return (1.0 - alpha) * e(sf) + alpha * e(st)
-
-
-def _warmup_score(genome: CellGenome, role: str, partners: list[CellGenome],
-                  system: CooperativeChemistrySystem, rng: Random,
-                  alpha: float, sf: str, st: str) -> float:
-    sampled = [rng.choice(partners) for _ in range(PARTNER_SAMPLES)]
-    errors = []
-    for partner in sampled:
-        m = _warmup_run_pair(genome, partner, system) if role == "B" else _warmup_run_pair(partner, genome, system)
-        errors.append(_warmup_blended(m, role.lower(), alpha, sf, st))
-    return sum(errors) / len(errors)
+    return {"echo_b": echo_b / n, "echo_c": echo_c / n, "gate": gate_err / n}
 
 
 def _run_warmup(system: CooperativeChemistrySystem) -> tuple[list[CellGenome], list[CellGenome]]:
     rng = Random(36)
     pop_b = [_random_genome(rng, f"B{i+1}") for i in range(POPULATION_SIZE)]
-    pop_c = [_random_genome(rng, f"C{i+1}") for i in range(POPULATION_SIZE)]
-    print("epistasis_bc_gate: warmup starting (200 curriculum gens)...")
+
+    # Seed cell3 population from motifs.db echo motifs if available.
+    # Motif patterns are stored as string rule names; embed them as local_motifs
+    # on random-codon genomes so the cell can express them via declare_rules().
+    store = MotifStore()
+    echo_motifs = store.query(role="echo", task="multiply_2cell", top_k=POPULATION_SIZE)
+    if echo_motifs:
+        pop_c: list[CellGenome] = []
+        for i, motif in enumerate(echo_motifs):
+            base = _random_genome(rng, f"C{i+1}_seeded")
+            pop_c.append(CellGenome(
+                codons=base.codons,
+                local_motifs=(motif,),
+                lineage_id=f"C{i+1}_seeded",
+            ))
+        while len(pop_c) < POPULATION_SIZE:
+            pop_c.append(_random_genome(rng, f"C{len(pop_c)+1}"))
+        print(f"epistasis_bc_gate: seeded {len(echo_motifs)} cell3 genomes from motifs.db echo motifs")
+    else:
+        pop_c = [_random_genome(rng, f"C{i+1}") for i in range(POPULATION_SIZE)]
+        print("epistasis_bc_gate: no echo motifs found in motifs.db, using random cell3 genomes")
+
+    print("epistasis_bc_gate: warmup starting (200 curriculum gens, 3-phase)...")
 
     for generation in range(WARMUP_GENS):
-        alpha, sf, st = _warmup_alpha(generation)
-        scores_b = sorted(
-            [(_warmup_score(g, "B", pop_c, system, rng, alpha, sf, st), g) for g in pop_b],
-            key=lambda x: x[0]
-        )
-        scores_c = sorted(
-            [(_warmup_score(g, "C", pop_b, system, rng, alpha, sf, st), g) for g in pop_c],
-            key=lambda x: x[0]
-        )
+        if generation < 100:
+            # Phase 1: solo echo — no partner interaction
+            scores_b = sorted(
+                [(_solo_echo_score_b(g, system), g) for g in pop_b],
+                key=lambda x: x[0]
+            )
+            scores_c = sorted(
+                [(_solo_echo_score_c(g, system), g) for g in pop_c],
+                key=lambda x: x[0]
+            )
+        elif generation < 150:
+            # Phase 2: paired echo — run together but score on own echo
+            scores_b = sorted(
+                [(sum(_paired_run(g, rng.choice(pop_c), system)["echo_b"]
+                      for _ in range(PARTNER_SAMPLES)) / PARTNER_SAMPLES, g)
+                 for g in pop_b],
+                key=lambda x: x[0]
+            )
+            scores_c = sorted(
+                [(sum(_paired_run(rng.choice(pop_b), g, system)["echo_c"]
+                      for _ in range(PARTNER_SAMPLES)) / PARTNER_SAMPLES, g)
+                 for g in pop_c],
+                key=lambda x: x[0]
+            )
+        else:
+            # Phase 3: blended gate — blend echo_own → gate_product
+            alpha = (generation - 150) / 49.0  # 0→1 over gens 150-199
+            scores_b = sorted(
+                [(sum(
+                    (1.0 - alpha) * _paired_run(g, rng.choice(pop_c), system)["echo_b"]
+                    + alpha * _paired_run(g, rng.choice(pop_c), system)["gate"]
+                    for _ in range(PARTNER_SAMPLES)) / PARTNER_SAMPLES, g)
+                 for g in pop_b],
+                key=lambda x: x[0]
+            )
+            scores_c = sorted(
+                [(sum(
+                    (1.0 - alpha) * _paired_run(rng.choice(pop_b), g, system)["echo_c"]
+                    + alpha * _paired_run(rng.choice(pop_b), g, system)["gate"]
+                    for _ in range(PARTNER_SAMPLES)) / PARTNER_SAMPLES, g)
+                 for g in pop_c],
+                key=lambda x: x[0]
+            )
+
         survivors_b = [g for _, g in scores_b[:SURVIVORS]]
         next_b: list[CellGenome] = list(survivors_b)
         while len(next_b) < POPULATION_SIZE:
