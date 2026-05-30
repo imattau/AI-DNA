@@ -12,9 +12,10 @@ from cell import CellState
 from chemistry import ChemistryContext
 from cooperative_chemistry import CooperativeChemistrySystem
 from evolution import mutate_genome
-from genome import CellGenome
+from genome import CellGenome, extract_motif_from_rules
 from codons import random_codons
 from tasks import TaskCase
+from motif_store import MotifStore
 
 
 SPLIT_CASES: tuple[tuple[int, int], ...] = tuple(
@@ -192,6 +193,8 @@ def main() -> None:
     system = CooperativeChemistrySystem()
     pop_a, pop_b = _run_warmup(system)
     rng = Random(33)
+    store = MotifStore()
+    motif_captured = False
 
     best_a_lineage = pop_a[0].lineage_id
     best_b_lineage = pop_b[0].lineage_id
@@ -219,6 +222,36 @@ def main() -> None:
             f"cell1_out={c1:.4f} cell1_s3={s3:.4f} cell2_out={c2:.4f} colony_out={colony:.4f} "
             f"lineage_a={best_a_lineage} lineage_b={best_b_lineage}"
         )
+
+        if not motif_captured and gen_best_gate < 0.05:
+            best_a = scores_a[0][1]
+            best_b = scores_b[0][1]
+            probe_case = _make_case(2, 3)
+            cell1 = CellState(active_rules=list(best_a.declare_rules()))
+            cell1.signals = [2 / 3.0, 0.0, 0.0, 0.0, 0.0]
+            cell2 = CellState(active_rules=list(best_b.declare_rules()))
+            cell2.signals = [0.0, 1.0, 0.0, 0.0, 0.0]
+            context = ChemistryContext()
+            system.run([cell1, cell2], probe_case, context=context, max_time=float(CHEMISTRY_ROUNDS))
+            motif_a = extract_motif_from_rules(
+                [r for r in best_a.declare_rules() if isinstance(r, str)],
+                origin_lineage=best_a.lineage_id,
+                origin_task="multiply_2cell",
+                origin_signals=tuple(cell1.signals),
+            )
+            motif_b = extract_motif_from_rules(
+                [r for r in best_b.declare_rules() if isinstance(r, str)],
+                origin_lineage=best_b.lineage_id,
+                origin_task="multiply_2cell",
+                origin_signals=tuple(cell2.signals),
+            )
+            store.save(motif_a, role="gate", task="multiply_2cell",
+                       gate_err=gen_best_gate, generation=generation, experiment="epistasis_colony4")
+            print(f"epistasis_colony4: motif_captured role=gate gen={generation} gate_err={gen_best_gate:.6f}")
+            store.save(motif_b, role="echo", task="multiply_2cell",
+                       gate_err=gen_best_gate, generation=generation, experiment="epistasis_colony4")
+            print(f"epistasis_colony4: motif_captured role=echo gen={generation} gate_err={gen_best_gate:.6f}")
+            motif_captured = True
 
         if generation % 20 == 0:
             best_a = scores_a[0][1]
