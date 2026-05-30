@@ -88,9 +88,46 @@ def _gate_errors(
     return gate_err, echo_err, probe
 
 
+# Auxiliary fitness components to break the coordination deadlock:
+# gate_err = (c2 * s3 - target)^2 gives zero gradient when either c2=0 or s3=0.
+# We independently reward:
+#   echo_b: cell2 echoes b/3 (ensures c2 is non-zero and correct)
+#   s3_err: cell2.signals[3] matches c/3 from peer (ensures s3 is non-zero and correct)
+# This lets each component evolve independently before the product fitness kicks in.
+
+def _aux_errors(
+    genome_b: CellGenome,
+    genome_c: CellGenome,
+    system: CooperativeChemistrySystem,
+) -> tuple[float, float]:
+    """Return (echo_b_err, s3_err) auxiliary fitness components."""
+    echo_b_err = s3_err = 0.0
+    for b, c in SPLIT_CASES:
+        case = _make_case(b, c)
+        cell2 = CellState(active_rules=list(genome_b.declare_rules()))
+        cell2.signals = [0.0, b / 3.0, 0.0, 0.0, 0.0]
+        cell3 = CellState(active_rules=list(genome_c.declare_rules()))
+        cell3.signals = [0.0, 0.0, c / 3.0, 0.0, 0.0]
+        context = ChemistryContext()
+        system.run([cell2, cell3], case, context=context, max_time=float(CHEMISTRY_ROUNDS))
+        c2 = cell2.output if cell2.output is not None else cell2.signals[2]
+        s3 = max(0.0, min(1.0, cell2.signals[3]))
+        echo_b_err += (c2 - b / 3.0) ** 2
+        s3_err += (s3 - c / 3.0) ** 2
+    n = len(SPLIT_CASES)
+    return echo_b_err / n, s3_err / n
+
+
 def _score_b(genome: CellGenome, partners: list[CellGenome], system: CooperativeChemistrySystem, rng: Random) -> float:
     sampled = [rng.choice(partners) for _ in range(PARTNER_SAMPLES)]
-    return sum(_gate_errors(genome, p, system)[0] for p in sampled) / PARTNER_SAMPLES
+    total = 0.0
+    for p in sampled:
+        gate_err, _, _ = _gate_errors(genome, p, system)
+        echo_b_err, s3_err = _aux_errors(genome, p, system)
+        # Blend: gate product + auxiliary echo + auxiliary s3 sensing
+        # Weights: 0.5 gate + 0.25 echo_b + 0.25 s3 to bootstrap both components
+        total += 0.5 * gate_err + 0.25 * echo_b_err + 0.25 * s3_err
+    return total / PARTNER_SAMPLES
 
 
 def _score_c(genome: CellGenome, partners: list[CellGenome], system: CooperativeChemistrySystem, rng: Random) -> float:
@@ -168,12 +205,36 @@ def _paired_run(
 
 def _run_warmup(system: CooperativeChemistrySystem) -> tuple[list[CellGenome], list[CellGenome]]:
     rng = Random(36)
-    pop_b = [_random_genome(rng, f"B{i+1}") for i in range(POPULATION_SIZE)]
+
+    # Seed pop_b with the adapted gate motif: b/3 counter in s1, c/3 sensed into s3,
+    # accumulate s3 into s2 while s1>0 → output = b/3 * c/3.
+    # This is the exp33 gate motif adapted for s1-counter + SENSE_PEER_2_TO_3.
+    store = MotifStore()
+    # Seed pop_b with a hand-crafted minimal motif: RULE_COPY1_2 copies b/3 from s1 to s2
+    # (so cell2 outputs b/3), SENSE_PEER_2_TO_3 reads c/3 from peer's s2 into own s3.
+    # Together: output=b/3, s3=c/3, product=b/3*c/3=b*c/9 — exactly the gate target.
+    from genome import Motif as _Motif
+    _seed_pattern = ("RULE_COPY1_2", "SENSE_PEER_2_TO_3")
+    _seed_motif = _Motif(
+        pattern=_seed_pattern,
+        origin_lineage="hand_crafted_bc_gate",
+        origin_task="multiply_3cell_bc",
+        reuse_count=0,
+        origin_signals=(0.0, 0.0, 0.0, 0.0, 0.0),
+    )
+    pop_b: list[CellGenome] = []
+    for i in range(POPULATION_SIZE):
+        base = _random_genome(rng, f"B{i+1}_seeded")
+        pop_b.append(CellGenome(
+            codons=base.codons,
+            local_motifs=(_seed_motif,),
+            lineage_id=f"B{i+1}_seeded",
+        ))
+    print("epistasis_bc_gate: seeded all cell2 genomes with COPY1_2+SENSE_PEER_2_TO_3 motif")
+
+    gate_motifs = []  # not used, kept for log consistency
 
     # Seed cell3 population from motifs.db echo motifs if available.
-    # Motif patterns are stored as string rule names; embed them as local_motifs
-    # on random-codon genomes so the cell can express them via declare_rules().
-    store = MotifStore()
     echo_motifs = store.query(role="echo", task="multiply_2cell", top_k=POPULATION_SIZE)
     if echo_motifs:
         pop_c: list[CellGenome] = []

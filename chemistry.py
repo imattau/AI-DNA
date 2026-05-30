@@ -18,6 +18,7 @@ class ChemistryContext:
     stage_increment: float = 0.0
     peer_vectors: dict[int, tuple[float, ...]] = field(default_factory=dict)
     events: list[dict[str, float | str]] = field(default_factory=list)
+    self_cell_index: int = -1  # set by CooperativeChemistrySystem before each cell's step
 
     def schedule(self, kind: str, *, when: float, payload: float | str | None = None) -> None:
         entry: dict[str, float | str] = {"kind": kind, "when": when}
@@ -115,6 +116,13 @@ def build_rulebook() -> dict[str, Rule]:
             return "copy1"
         return None
 
+    def copy1_2(state: CellState, task: TaskCase, context: ChemistryContext) -> str | None:
+        """Copy signals[1] → signals[2]. Allows a cell to echo its s1 value as output."""
+        if state.signals[2] != state.signals[1]:
+            state.signals[2] = state.signals[1]
+            return "copy1_2"
+        return None
+
     def add3_if1(state: CellState, task: TaskCase, context: ChemistryContext) -> str | None:
         if state.signals[1] > 0:
             state.signals[2] += state.signals[3]
@@ -170,6 +178,32 @@ def build_rulebook() -> dict[str, Rule]:
             state.signals[peer_index] = value
         return f"sense_peer_{peer_index}" if changed else None
 
+    def _sense_peer_cross(
+        state: CellState, context: ChemistryContext, src_index: int, dst_index: int
+    ) -> str | None:
+        """Read any OTHER peer's signals[src_index], write to own.signals[dst_index].
+
+        Searches all peer cells (by cell index), excluding self (context.self_cell_index),
+        for any that has a non-zero value at signal slot src_index, preferring largest.
+        This decouples cell-index from signal-slot, allowing cross-slot sensing.
+        """
+        if dst_index >= len(state.signals):
+            return None
+        best_value: float | None = None
+        for cell_idx, peer_vector in context.peer_vectors.items():
+            if cell_idx == context.self_cell_index:
+                continue  # skip self
+            if src_index < len(peer_vector):
+                v = float(peer_vector[src_index])
+                if best_value is None or abs(v) > abs(best_value):
+                    best_value = v
+        if best_value is None:
+            return None
+        changed = state.signals[dst_index] != best_value
+        if changed:
+            state.signals[dst_index] = best_value
+        return f"sense_peer_{src_index}_to_{dst_index}" if changed else None
+
     return {
         "RULE_EMIT_X": Rule("RULE_EMIT_X", emit_x),
         "RULE_EMIT_Y": Rule("RULE_EMIT_Y", emit_y),
@@ -180,6 +214,7 @@ def build_rulebook() -> dict[str, Rule]:
         "RULE_INHIBIT1Z": Rule("RULE_INHIBIT1Z", inhibit1z),
         "RULE_COPY0_3": Rule("RULE_COPY0_3", copy0_3),
         "RULE_COPY1_3": Rule("RULE_COPY1_3", copy1_3),
+        "RULE_COPY1_2": Rule("RULE_COPY1_2", copy1_2),
         "RULE_ADD3_IF1": Rule("RULE_ADD3_IF1", add3_if1),
         "RULE_DECAY3": Rule("RULE_DECAY3", decay3),
         "RULE_THRESH1": Rule("RULE_THRESH1", thresh1),
@@ -189,6 +224,8 @@ def build_rulebook() -> dict[str, Rule]:
         "SENSE_PEER_0": Rule("SENSE_PEER_0", lambda state, task, context: _sense_peer(state, context, 0)),
         "SENSE_PEER_1": Rule("SENSE_PEER_1", lambda state, task, context: _sense_peer(state, context, 1)),
         "SENSE_PEER_2": Rule("SENSE_PEER_2", lambda state, task, context: _sense_peer(state, context, 2)),
+        "SENSE_PEER_2_TO_3": Rule("SENSE_PEER_2_TO_3", lambda state, task, context: _sense_peer_cross(state, context, 2, 3)),
+        "SENSE_PEER_1_TO_3": Rule("SENSE_PEER_1_TO_3", lambda state, task, context: _sense_peer_cross(state, context, 1, 3)),
     }
 
 
